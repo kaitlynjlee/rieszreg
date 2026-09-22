@@ -41,7 +41,7 @@ def test_single_basis_leaf_matches_closed_form_tsm():
     a = (rng.uniform(size=n) > 0.4).astype(float)
     df = pd.DataFrame({"a": a, "x": x})
 
-    estimand = TSM(level=1)
+    estimand = TSM(level=1, covariates=["x"])
     phi_fns = default_riesz_features(estimand)   # [1{T=1}]
     rows = df.to_dict("records")
     feature_keys = estimand.feature_keys
@@ -82,7 +82,7 @@ def test_sieve_leaf_matches_closed_form_ate():
     a = (rng.uniform(size=n) < pi).astype(float)
     df = pd.DataFrame({"a": a, "x": x})
 
-    estimand = ATE()
+    estimand = ATE(covariates=["x"])
     phi_fns = default_riesz_features(estimand)
     rows = df.to_dict("records")
     feature_keys = estimand.feature_keys

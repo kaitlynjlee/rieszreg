@@ -25,6 +25,8 @@ class AugForestRieszRegressor(RieszEstimator):
     Parameters
     ----------
     estimand : rieszreg.Estimand
+        What to estimate, e.g. ``ATE(treatment="treated")``. Also names the
+        treatment and covariate columns (default: every non-treatment column).
     loss : rieszreg.Loss, default=None
         Resolves to ``SquaredLoss()`` if ``None``. All four built-in
         Bregman losses (``SquaredLoss``, ``KLLoss``, ``BernoulliLoss``,

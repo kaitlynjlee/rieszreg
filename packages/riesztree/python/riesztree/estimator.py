@@ -15,6 +15,8 @@ from __future__ import annotations
 import warnings
 from typing import Sequence
 
+from sklearn.utils.validation import check_is_fitted
+
 from rieszreg import Estimand, Loss, RieszEstimator, SquaredLoss
 
 from .backend import RieszTreeBackend
@@ -31,7 +33,8 @@ class RieszTreeRegressor(RieszEstimator):
     Parameters
     ----------
     estimand : rieszreg.Estimand
-        Carries ``feature_keys`` and the ``m(alpha)(z, y)`` operator.
+        What to estimate, e.g. ``ATE(treatment="treated")``. Also names the
+        treatment and covariate columns (default: every non-treatment column).
     loss : rieszreg.Loss, default=None
         Bregman-Riesz loss. ``None`` resolves to ``SquaredLoss()``. Built-in
         support: ``SquaredLoss``, ``KLLoss``, ``BernoulliLoss``,
@@ -193,7 +196,7 @@ class RieszTreeRegressor(RieszEstimator):
         ``feature_keys`` from the resolved estimand so save/load round-trips
         carry the column ordering."""
         super().fit(Z, y=y, eval_set=eval_set, eval_y=eval_y)
-        self.predictor_.feature_keys = tuple(self.feature_keys_)
+        self.predictor_.feature_keys = tuple(self.estimand_.feature_keys)
         return self
 
     def cost_complexity_pruning_path(self, Z=None, y=None):
@@ -234,12 +237,7 @@ class RieszTreeRegressor(RieszEstimator):
             tree = scratch.predictor_.tree
             loss = scratch._resolved_loss()
         else:
-            if not hasattr(self, "predictor_"):
-                raise RuntimeError(
-                    f"{type(self).__name__}.cost_complexity_pruning_path() "
-                    f"called without (Z, y) on an unfitted estimator. "
-                    f"Either pass (Z, y) or call fit(Z, y) first."
-                )
+            check_is_fitted(self, "predictor_")
             tree = self.predictor_.tree
             loss = self.loss_
 

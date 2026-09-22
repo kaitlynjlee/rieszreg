@@ -162,7 +162,9 @@ For the Lalonde quickstart above, the wiring looks like this:
 | Covariates $X$ | `age`, `educ`, `black`, `hisp`, `marr`, `nodegree`, `re74`, `re75` | `ATE(covariates=(...))` — also `feature_keys`. |
 | Outcome $Y$ | `re78` | `.fit(Z, y=df["re78"])`. |
 
-The `Z` dataframe must contain every name in `feature_keys`; extra columns are ignored. With an `ndarray`, columns are interpreted in `feature_keys` order.
+Leave `covariates` out to use every column of `Z` other than the treatment: `ATE(treatment="treat")` fits $\alpha$ on `treat` plus all eight covariates here. Keep the outcome out of `Z` when you do this. After fitting, `est.feature_names_in_` lists the columns $\alpha$ uses.
+
+When `covariates` is given, `Z` must contain every name in `feature_keys`, and other columns are ignored. With an `ndarray`, the treatment is column 0 and the rest are the covariates, in order.
 
 ## Theory: how the augmented dataset is derived
 
@@ -380,5 +382,3 @@ Today every estimand `rieszreg` handles is a `FiniteEvalEstimand`: $m$ reduces t
 - **Integrals.** $m(\mu)(z, y) = \int \mu(a', x)\,h(a' \mid z)\,da'$ for a known density $h$. The classic example is a stochastic-intervention policy. Approximate via Monte Carlo to reduce to the finite-evaluation case (with $K$ samples per row), or support natively via a backend that integrates $\alpha$ analytically.
 - **Derivatives.** $m(\mu)(z, y) = \partial_a \mu(a, x)\big|_{a = z_a}$. Finite-difference approximations reduce to the finite-evaluation case; backends with autodiff can support directly.
 - **Other linear operators on $\mu$.** Any $m$ that satisfies linearity on $\mu$ (additivity and scalar homogeneity) but doesn't fit the patterns above.
-
-A previously released `StochasticIntervention` factory is currently stubbed (raises `NotImplementedError`). A reintroduction will land once the integral-vs-finite-evaluation distinction is wired into the type hierarchy.

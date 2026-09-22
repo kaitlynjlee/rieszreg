@@ -10,6 +10,7 @@ same seed.
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 import rieszboost
 from rieszboost import RieszBooster
@@ -69,7 +70,7 @@ def test_predict_path_validates_grid_range():
 def test_predict_path_unfitted_raises():
     df = _simulate(100, seed=4)
     booster = _booster(10)
-    with pytest.raises(RuntimeError, match="not fitted"):
+    with pytest.raises(NotFittedError):
         booster.predict_path(df, [5])
 
 

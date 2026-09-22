@@ -51,3 +51,16 @@ def test_save_load_kl_loss_tsm(linear_gaussian_ate, covariate_keys):
         loaded = RieszTreeRegressor.load(tmp)
         a_after = loaded.predict(df)
     assert np.allclose(a_before, a_after, atol=1e-12)
+
+
+def test_load_binds_passed_unbound_estimand(linear_gaussian_ate):
+    """load(path, estimand=ATE()) resolves the default covariates=None
+    against the saved columns, so predictions match the original fit."""
+    make, _ = linear_gaussian_ate
+    df = make(400, seed=0)
+    est = RieszTreeRegressor(estimand=ATE(), max_depth=4).fit(df)
+    with tempfile.TemporaryDirectory() as tmp:
+        est.save(tmp)
+        for loaded in (RieszTreeRegressor.load(tmp), RieszTreeRegressor.load(tmp, estimand=ATE())):
+            assert loaded.estimand_.feature_keys == est.estimand_.feature_keys
+            assert np.allclose(loaded.predict(df), est.predict(df), atol=1e-12)

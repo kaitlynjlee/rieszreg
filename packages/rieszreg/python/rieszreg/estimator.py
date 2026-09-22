@@ -1,12 +1,12 @@
 """Sklearn-compatible orchestrator for Riesz representer estimation.
 
 `RieszEstimator` takes (estimand, loss, backend) at construction and implements
-the standard sklearn `fit / predict / score` API. Backend-specific
+the standard sklearn `fit / predict / score` API. Learner-specific
 hyperparameters live on subclasses (e.g. `RieszBooster` in `rieszboost` adds
 `max_depth`, `reg_lambda`, `subsample`).
 
-Designed to compose with `sklearn.model_selection.GridSearchCV`,
-`cross_val_predict`, `clone`, etc. Mirrors ngboost's API style.
+Composes with `sklearn.model_selection.GridSearchCV`, `cross_val_predict`,
+`clone`, `Pipeline`, etc.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Sequence
 import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
+from sklearn.utils.validation import check_is_fitted
 
 from ._omp import warn_if_multi_backend_omp
 from .backends import Backend, load_predictor
@@ -26,6 +27,21 @@ from .losses import Loss, SquaredLoss, loss_from_spec
 
 def _is_dataframe(Z) -> bool:
     return hasattr(Z, "columns") and hasattr(Z, "iloc")
+
+
+def _missing_columns_message(estimand: Estimand, missing, columns) -> str:
+    return (
+        f"The data is missing columns {missing} needed by {estimand.name}; "
+        f"it has columns {list(columns)}. Tell the estimand your column "
+        "names, e.g. ATE(treatment=\"treated\", covariates=[\"age\", \"income\"])."
+    )
+
+
+def _n_columns(Z) -> int:
+    if _is_dataframe(Z):
+        return Z.shape[1]
+    arr = np.asarray(Z)
+    return 1 if arr.ndim == 1 else arr.shape[1]
 
 
 def _rows_from_Z(Z, estimand: Estimand) -> list[dict]:
@@ -41,10 +57,7 @@ def _rows_from_Z(Z, estimand: Estimand) -> list[dict]:
         cols_needed = list(estimand.feature_keys)
         missing = [c for c in cols_needed if c not in Z.columns]
         if missing:
-            raise ValueError(
-                f"DataFrame is missing columns required by estimand "
-                f"{estimand.name!r}: {missing}"
-            )
+            raise ValueError(_missing_columns_message(estimand, missing, Z.columns))
         # Vectorise the per-column extraction: one .to_numpy() per column
         # rather than O(n*p) .iloc lookups. The downstream consumers see
         # the same list-of-dicts shape.
@@ -81,10 +94,7 @@ def _features_from_Z(Z, estimand: Estimand) -> np.ndarray:
         cols_needed = list(estimand.feature_keys)
         missing = [c for c in cols_needed if c not in Z.columns]
         if missing:
-            raise ValueError(
-                f"DataFrame is missing columns required by estimand "
-                f"{estimand.name!r}: {missing}"
-            )
+            raise ValueError(_missing_columns_message(estimand, missing, Z.columns))
         return Z[cols_needed].to_numpy(dtype=float)
 
     arr = np.asarray(Z, dtype=float)
@@ -151,20 +161,22 @@ def _split_Z(Z, y, validation_fraction: float, random_state: int):
 
 
 class RieszEstimator(BaseEstimator):
-    """Generic sklearn-compatible orchestrator. Implementation packages
-    typically expose a thin subclass with a default `backend` baked in
-    (e.g. `RieszBooster` defaults to `XGBoostBackend()`).
+    """Estimate the Riesz representer α₀ of a causal estimand.
+
+    Most users start from a learner package's subclass, which picks the
+    backend for you: `RieszBooster` (rieszboost), `KernelRieszRegressor`
+    (krrr), `ForestRieszRegressor` / `AugForestRieszRegressor` (forestriesz),
+    `RieszNet` (riesznet), `RieszTreeRegressor` (riesztree). Use
+    `RieszEstimator` directly to pair an estimand with a backend object.
 
     Parameters
     ----------
     estimand : Estimand
-        Carries `feature_keys` and the `m(alpha)(z, y)` operator. Required.
+        What you want to estimate, e.g. ``ATE(treatment="treated")``. The
+        estimand also names the treatment and covariate columns of ``X``.
     backend : Backend
-        Concrete backend implementing the `fit_augmented` (or `fit_rows`)
-        Protocol. Required (no default at this level). All learner-specific
-        knobs (`n_estimators`, `learning_rate`, `early_stopping_rounds`,
-        NN training-loop config, kernel choice, etc.) live on the backend
-        constructor — see DESIGN.md §A.1 (the agnostic-orchestrator rule).
+        The learner that fits α̂ (e.g. ``XGBoostBackend()``). Required here;
+        the learner-package subclasses supply one for you.
     loss : Loss, default=None
         The Bregman-Riesz loss to minimize. Defaults to `SquaredLoss()`.
     init : float or None
@@ -173,6 +185,19 @@ class RieszEstimator(BaseEstimator):
         on the training rows, projected into the loss's α-domain. Pass an
         explicit float to override (e.g. ``init=0`` for hard-zero start).
     random_state : int, default=0
+        Seed for every source of randomness in the fit (validation split,
+        subsampling, weight initialization).
+
+    Attributes
+    ----------
+    estimand_ : Estimand
+        The estimand with its columns resolved against the training data.
+    n_features_in_ : int
+        Number of columns α̂ is a function of (treatment + covariates).
+    feature_names_in_ : ndarray of str
+        Those column names, in the order α̂ uses them.
+    loss_ : Loss
+        The loss used for fitting.
     """
 
     def __init__(
@@ -180,7 +205,7 @@ class RieszEstimator(BaseEstimator):
         estimand: Estimand,
         backend: Backend | None = None,
         loss: Loss | None = None,
-        init: float | str | None = None,
+        init: float | None = None,
         random_state: int = 0,
     ):
         self.estimand = estimand
@@ -212,18 +237,23 @@ class RieszEstimator(BaseEstimator):
     def fit(self, Z, y=None, eval_set=None, eval_y=None) -> "RieszEstimator":
         """Fit the Riesz representer.
 
-        `Z` is the predictor matrix — treatment column(s) plus covariates
-        in `estimand.feature_keys` order. `y` is sklearn-style: a separate
-        per-row outcome vector. It is plumbed into the estimand's
-        `m(alpha)(z, y)` and into the augmentation / moment backends.
-        Built-in factories (`ATE`, `ATT`, `TSM`, `AdditiveShift`,
-        `LocalShift`) ignore `y`; pass it anyway when following sklearn
-        convention. Custom Y-dependent estimands require `y` to be
-        provided.
-
-        `eval_set` is the held-out predictor matrix for early-stopping /
-        λ-selection (when the backend uses one); pair it with `eval_y` to
-        feed an outcome vector for the same rows.
+        Parameters
+        ----------
+        Z : DataFrame or ndarray of shape (n, p)
+            The treatment column plus covariates (sklearn's ``X``). With a
+            DataFrame, columns are matched by the names the estimand was
+            given; with an ndarray, the treatment is column 0.
+        y : array-like of shape (n,), optional
+            The outcome. The built-in treatment estimands (``ATE``, ``ATT``,
+            ``TSM``, ``AdditiveShift``, ``LocalShift``) do not use it — the
+            Riesz representer depends only on treatment and covariates — so
+            passing it is harmless. Estimands whose functional reads the
+            outcome (``OutcomeRegNormSq``, custom Y-dependent ones) need it.
+        eval_set : DataFrame or ndarray, optional
+            Held-out rows for early stopping / λ selection, when the learner
+            uses one. Overrides the learner's internal ``validation_fraction``.
+        eval_y : array-like, optional
+            Outcome for the ``eval_set`` rows.
         """
         warn_if_multi_backend_omp()
         loss = self._resolved_loss()
@@ -231,10 +261,14 @@ class RieszEstimator(BaseEstimator):
 
         if not isinstance(self.estimand, FiniteEvalEstimand):
             raise TypeError(
-                f"RieszEstimator.fit() requires a FiniteEvalEstimand; got "
-                f"{type(self.estimand).__name__}. Use a built-in factory "
-                "(ATE, ATT, TSM, ...) or `FiniteEvalEstimand(feature_keys=..., m=...)`."
+                f"estimand must be a built-in estimand (ATE, ATT, TSM, "
+                f"AdditiveShift, LocalShift, OutcomeRegNormSq) or a "
+                f"FiniteEvalEstimand(feature_keys=..., m=...); got "
+                f"{type(self.estimand).__name__}."
             )
+        estimand = self.estimand.bind(
+            list(Z.columns) if _is_dataframe(Z) else _n_columns(Z)
+        )
 
         # Resolve validation slice. Backends that use a held-out slice for
         # fit-time logic (early stopping, λ selection) expose
@@ -255,15 +289,15 @@ class RieszEstimator(BaseEstimator):
         # Augmentation: dispatch via `estimand.augment(features, ys)`.
         # Built-in subclasses override with vectorised numpy; custom estimands
         # use the inherited Tracer-based default.
-        feats_train = _features_from_Z(Z_train, self.estimand)
+        feats_train = _features_from_Z(Z_train, estimand)
         n_train = feats_train.shape[0]
         ys_train = _ys_from_y(y_train, n_train)
-        aug_train = self.estimand.augment(feats_train, ys=ys_train)
+        aug_train = estimand.augment(feats_train, ys=ys_train)
 
         if Z_valid is not None and len(Z_valid) > 0:
-            feats_valid = _features_from_Z(Z_valid, self.estimand)
+            feats_valid = _features_from_Z(Z_valid, estimand)
             ys_valid = _ys_from_y(y_valid, feats_valid.shape[0])
-            aug_valid = self.estimand.augment(feats_valid, ys=ys_valid)
+            aug_valid = estimand.augment(feats_valid, ys=ys_valid)
         else:
             feats_valid = None
             ys_valid = None
@@ -278,19 +312,19 @@ class RieszEstimator(BaseEstimator):
         # custom estimands fall back to a per-row trace.
         init_arg = self.init
         if init_arg is None:
-            mbar_builtin = self.estimand.m_bar
+            mbar_builtin = estimand.m_bar
             if mbar_builtin is not None and ys_train is None:
                 m_bar = float(mbar_builtin)
             else:
-                rows_train = _rows_from_Z(Z_train, self.estimand)
+                rows_train = _rows_from_Z(Z_train, estimand)
                 if ys_train is None:
                     m_bar = float(np.mean(
-                        [sum(c for c, _ in trace(self.estimand, z)) for z in rows_train]
+                        [sum(c for c, _ in trace(estimand, z)) for z in rows_train]
                     ))
                 else:
                     m_bar = float(np.mean(
                         [
-                            sum(c for c, _ in trace(self.estimand, z, y_i))
+                            sum(c for c, _ in trace(estimand, z, y_i))
                             for z, y_i in zip(rows_train, ys_train)
                         ]
                     ))
@@ -314,16 +348,16 @@ class RieszEstimator(BaseEstimator):
         if uses_moment_path:
             # Moment backends consume row-dicts; materialise from the feature
             # ndarrays we already built.
-            rows_train = _rows_from_Z(Z_train, self.estimand)
+            rows_train = _rows_from_Z(Z_train, estimand)
             rows_valid = (
-                _rows_from_Z(Z_valid, self.estimand)
+                _rows_from_Z(Z_valid, estimand)
                 if Z_valid is not None and len(Z_valid) > 0
                 else None
             )
             result = backend.fit_rows(
                 rows_train,
                 rows_valid,
-                self.estimand,
+                estimand,
                 loss,
                 ys_train=ys_train,
                 ys_valid=ys_valid,
@@ -337,33 +371,36 @@ class RieszEstimator(BaseEstimator):
         self.best_score_ = result.best_score
         self.base_score_ = base_score
         self.loss_ = loss
-        self.feature_keys_ = self.estimand.feature_keys
+        self.estimand_ = estimand
+        self.n_features_in_ = len(estimand.feature_keys)
+        self.feature_names_in_ = np.asarray(estimand.feature_keys, dtype=object)
         return self
 
+    def _features(self, Z) -> np.ndarray:
+        """Check the estimator is fitted and pull α̂'s input columns from Z."""
+        check_is_fitted(self, "predictor_")
+        return _features_from_Z(Z, self.estimand_)
+
     def predict(self, Z) -> np.ndarray:
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(f"{type(self).__name__} is not fitted yet. Call .fit() first.")
-        # Fast path: DataFrame -> ndarray directly, skipping the
-        # list-of-dicts pivot (which was O(n*p) Python overhead).
-        feats = _features_from_Z(Z, self.estimand)
+        """Return α̂ evaluated at each row of Z, shape ``(n,)``."""
+        feats = self._features(Z)
         return self.predictor_.predict_alpha(feats)
 
-    def riesz_loss(self, Z, y=None) -> float:
-        """Per-row empirical Riesz loss on Z under this estimator's loss.
-
-        Pass `y` when the estimand's `m` reads it (most built-ins do not).
-        """
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(f"{type(self).__name__} is not fitted yet.")
-        feats = _features_from_Z(Z, self.estimand)
-        ys = _ys_from_y(y, feats.shape[0])
-        aug = self.estimand.augment(feats, ys=ys)
-        eta = self.predictor_.predict_eta(aug.features)
-        alpha = self.loss_.link_to_alpha(eta)
+    def _loss_on(self, Z, y, loss: Loss) -> float:
+        """Mean per-row Riesz loss of the fitted α̂ on (Z, y) under ``loss``."""
+        feats = self._features(Z)
+        aug = self.estimand_.augment(feats, ys=_ys_from_y(y, feats.shape[0]))
+        alpha = self.loss_.link_to_alpha(self.predictor_.predict_eta(aug.features))
         return float(
-            np.sum(self.loss_.aug_loss_alpha(aug.is_original, aug.potential_deriv_coef, alpha))
+            np.sum(loss.aug_loss_alpha(aug.is_original, aug.potential_deriv_coef, alpha))
             / aug.n_rows
         )
+
+    def riesz_loss(self, Z, y=None) -> float:
+        """Mean per-row Riesz loss on (Z, y) under the loss the estimator was
+        trained with. Lower is better. Pass ``y`` only when the estimand's
+        functional reads the outcome."""
+        return self._loss_on(Z, y, self.loss_)
 
     def score(self, Z, y=None) -> float:
         """Return negative held-out canonical Riesz loss (squared loss).
@@ -375,24 +412,17 @@ class RieszEstimator(BaseEstimator):
         estimators fit with different losses (e.g. KL vs squared).
 
         Pass `scoring=riesz_scorer(loss=...)` to sklearn CV utilities to use a
-        different yardstick. `riesz_loss(Z)` remains available as the
-        own-loss diagnostic. `y` is plumbed into `m(alpha)(z, y)` for
-        Y-dependent custom estimands.
+        different yardstick. `riesz_loss(Z)` is the own-loss diagnostic.
+        `y` is plumbed into `m(alpha)(z, y)` for Y-dependent estimands.
         """
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(f"{type(self).__name__} is not fitted yet.")
-        feats = _features_from_Z(Z, self.estimand)
-        ys = _ys_from_y(y, feats.shape[0])
-        aug = self.estimand.augment(feats, ys=ys)
-        eta = self.predictor_.predict_eta(aug.features)
-        alpha_hat = self.loss_.link_to_alpha(eta)
-        yardstick = SquaredLoss()
-        return -float(
-            np.sum(yardstick.aug_loss_alpha(aug.is_original, aug.potential_deriv_coef, alpha_hat))
-            / aug.n_rows
-        )
+        return -self._loss_on(Z, y, SquaredLoss())
 
     def diagnose(self, Z, **kwargs):
+        """Health checks on α̂ over Z: magnitude, extreme values (a sign of
+        poor overlap / near-positivity violations), and held-out Riesz loss.
+        Returns a `Diagnostics` object; call ``.summary()`` for a report.
+        Keyword arguments (``extreme_threshold``, ``extreme_fraction_warn``)
+        are forwarded to `rieszreg.diagnose`."""
         from .diagnostics import diagnose
         return diagnose(estimator=self, Z=Z, **kwargs)
 
@@ -416,10 +446,7 @@ class RieszEstimator(BaseEstimator):
         import json
         from pathlib import Path
 
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(
-                f"Cannot save unfitted {type(self).__name__}. Call .fit() first."
-            )
+        check_is_fitted(self, "predictor_")
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
@@ -430,8 +457,8 @@ class RieszEstimator(BaseEstimator):
             "rieszreg_format_version": 1,
             "predictor_kind": self.predictor_.kind,
             "loss": self.loss_.to_spec(),
-            "estimand_factory_spec": self.estimand.factory_spec,  # None if custom
-            "feature_keys": list(self.feature_keys_),
+            "estimand_factory_spec": self.estimand_.factory_spec,  # None if custom
+            "feature_keys": list(self.estimand_.feature_keys),
             "base_score": self.base_score_,
             "best_iteration": self.best_iteration_,
             "best_score": self.best_score_,
@@ -478,6 +505,15 @@ class RieszEstimator(BaseEstimator):
                     f"{cls.__name__}.load(path, estimand=my_estimand)."
                 )
             estimand = estimand_from_spec(spec)
+        # A passed-in built-in like ATE() has covariates=None; resolve it
+        # against the columns the model was trained on.
+        estimand = estimand.bind(metadata["feature_keys"])
+        if tuple(estimand.feature_keys) != tuple(metadata["feature_keys"]):
+            raise ValueError(
+                f"The estimand passed to load() uses columns "
+                f"{list(estimand.feature_keys)}, but the model at {path} was "
+                f"fit on {metadata['feature_keys']}."
+            )
 
         predictor = load_predictor(
             metadata["predictor_kind"],
@@ -494,7 +530,9 @@ class RieszEstimator(BaseEstimator):
         instance.best_score_ = metadata.get("best_score")
         instance.base_score_ = metadata["base_score"]
         instance.loss_ = loss
-        instance.feature_keys_ = tuple(metadata["feature_keys"])
+        instance.estimand_ = estimand
+        instance.n_features_in_ = len(metadata["feature_keys"])
+        instance.feature_names_in_ = np.asarray(metadata["feature_keys"], dtype=object)
         return instance
 
     @classmethod

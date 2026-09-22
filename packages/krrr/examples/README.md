@@ -15,7 +15,6 @@ root, e.g.:
 | `tsm_quickstart.py` | `TSM(level=1)` | binary treatment, logistic propensity |
 | `additive_shift_quickstart.py` | `AdditiveShift(δ=0.2)` | continuous treatment |
 | `local_shift_quickstart.py` | `LocalShift(δ=0.2, threshold=0.5)` (partial) | continuous treatment |
-| `stochastic_intervention_quickstart.py` | `StochasticIntervention(samples_key="shift_samples")` | continuous treatment, MTP |
 
 **Reference parity** vs the [`dml-tmle`](https://github.com/alejandroschuler/dml-tmle) `krrr.R`
 reference implementation lives in the test suite at

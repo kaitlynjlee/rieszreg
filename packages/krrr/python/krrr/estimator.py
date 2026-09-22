@@ -14,7 +14,7 @@ from typing import Sequence
 import numpy as np
 
 from rieszreg.estimands.base import Estimand
-from rieszreg.estimator import RieszEstimator, _features_from_rows, _rows_from_Z
+from rieszreg.estimator import RieszEstimator
 from rieszreg.losses import Loss, SquaredLoss
 
 from .backend import KernelRidgeBackend
@@ -31,7 +31,8 @@ class KernelRieszRegressor(RieszEstimator):
     Parameters
     ----------
     estimand : rieszreg.Estimand
-        Carries `feature_keys` and the `m(alpha)(z, y)` operator.
+        What to estimate, e.g. ``ATE(treatment="treated")``. Also names the
+        treatment and covariate columns (default: every non-treatment column).
     kernel : krrr.Kernel, default=Gaussian(length_scale="median")
         Reproducing kernel. Length-scale "median" resolves to the median
         pairwise Euclidean distance on the augmented training points.
@@ -142,12 +143,7 @@ class KernelRieszRegressor(RieszEstimator):
         Requires ``keep_path=True`` (the default). Raises ``RuntimeError`` if
         the estimator was fit with ``keep_path=False``.
         """
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(
-                f"{type(self).__name__} is not fitted yet. Call .fit() first."
-            )
-        rows = _rows_from_Z(Z, self.estimand)
-        feats = _features_from_rows(rows, self.estimand)
+        feats = self._features(Z)
         return self.predictor_.predict_alpha_path(feats, lambdas)
 
     # ---- save/load: defer to base class via the registry ----

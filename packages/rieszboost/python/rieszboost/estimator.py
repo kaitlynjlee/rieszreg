@@ -14,7 +14,7 @@ from typing import Sequence
 import numpy as np
 
 from rieszreg.estimands.base import Estimand
-from rieszreg.estimator import RieszEstimator, _features_from_rows, _rows_from_Z
+from rieszreg.estimator import RieszEstimator
 from rieszreg.losses import Loss
 
 from .backends import Backend, XGBoostBackend
@@ -27,7 +27,8 @@ class RieszBooster(RieszEstimator):
     Parameters
     ----------
     estimand : Estimand
-        Carries `feature_keys` and the `m(alpha)(z, y)` operator. Required.
+        What to estimate, e.g. ``ATE(treatment="treated")``. Also names the
+        treatment and covariate columns (default: every non-treatment column).
     backend : Backend, default=XGBoostBackend()
         Where the actual tree fitting happens. Swap to `SklearnBackend(...)`
         to use a non-tree base learner (KernelRidge, MLPs, etc.).
@@ -91,12 +92,7 @@ class RieszBooster(RieszEstimator):
 
         Each grid entry must satisfy ``1 ≤ k ≤ booster.num_boosted_rounds()``.
         """
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(
-                f"{type(self).__name__} is not fitted yet. Call .fit() first."
-            )
-        rows = _rows_from_Z(Z, self.estimand)
-        feats = _features_from_rows(rows, self.estimand)
+        feats = self._features(Z)
         return self.predictor_.predict_alpha_path(feats, n_estimators_grid)
 
     # Boosting-loop knobs that only take effect when RieszBooster itself

@@ -51,7 +51,7 @@ def test_augment_shape_and_values():
 def test_augment_requires_ys():
     e = OutcomeRegNormSq(covariates=("x",))
     X, _ = _make_xy(n=10, p=1)
-    with pytest.raises(ValueError, match="requires ys"):
+    with pytest.raises(ValueError, match="needs the outcome"):
         e.augment(X)
 
 

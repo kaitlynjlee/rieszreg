@@ -254,7 +254,7 @@ The pattern generalizes verbatim. Swap the estimand factory and the $m(\hat\mu)(
 | TSM at $a^\star$ | $\hat\mu(a^\star, X)$ | `TSM(level=a_star)` |
 | Additive shift $\delta$ | $\hat\mu(A + \delta, X) - \hat\mu(A, X)$ | `AdditiveShift(delta)` |
 
-Worked examples for each: [`rieszboost/examples/`](https://github.com/rieszreg/rieszboost/tree/main/examples) (`tsm.py`, `stochastic_intervention.py`, `lee_schuler/binary_dgp.py`).
+Worked examples for each: [`rieszboost/examples/`](https://github.com/rieszreg/rieszboost/tree/main/examples) (`tsm.py`, `nhefs_shift.py`, `lee_schuler/binary_dgp.py`).
 
 ## See also
 
