@@ -14,7 +14,6 @@ For each candidate-collapse subtree this requires per-subtree
 
 from __future__ import annotations
 
-import warnings
 
 from .splitter import make_leaf_solvers
 from .tree import Node
@@ -77,8 +76,7 @@ def cost_complexity_prune(
     root: Node,
     loss,
     *,
-    ccp_alpha: float | None = None,
-    pruning_alpha: float | None = None,
+    ccp_alpha: float = 0.0,
 ) -> Node:
     """Prune the tree in place by repeatedly collapsing the weakest link.
 
@@ -86,20 +84,8 @@ def cost_complexity_prune(
     the pruned root (same object as input, mutated).
 
     The keyword is ``ccp_alpha`` to match
-    :class:`sklearn.tree.DecisionTreeRegressor`. ``pruning_alpha`` is
-    accepted as a deprecated alias and emits ``FutureWarning``.
+    :class:`sklearn.tree.DecisionTreeRegressor`.
     """
-    if pruning_alpha is not None:
-        warnings.warn(
-            "`pruning_alpha` is deprecated; use `ccp_alpha` instead "
-            "(matches sklearn.tree.DecisionTreeRegressor).",
-            FutureWarning,
-            stacklevel=2,
-        )
-        if ccp_alpha is None:
-            ccp_alpha = pruning_alpha
-    if ccp_alpha is None:
-        ccp_alpha = 0.0
     if ccp_alpha <= 0.0:
         return root
     leaf_loss, _ = make_leaf_solvers(loss)

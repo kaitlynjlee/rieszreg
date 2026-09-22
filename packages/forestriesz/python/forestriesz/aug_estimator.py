@@ -15,7 +15,10 @@ from .aug_backend import AugForestRieszBackend
 
 
 class AugForestRieszRegressor(RieszEstimator):
-    """Augmentation-style random-forest Riesz regression.
+    """Random-forest Riesz regression: the recommended forest learner.
+    Works on every estimand and every built-in loss with no extra setup.
+    (:class:`ForestRieszRegressor` is the published ForestRiesz method,
+    kept for comparison.)
 
     An ensemble of single-tree Riesz regressors fit on the augmented dataset
     of evaluation points with weights ``(D_r, C_r)`` that ``Estimand.augment``

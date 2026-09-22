@@ -145,8 +145,6 @@ booster = RieszBooster(estimand=est, n_estimators=200).fit(df)
 | `AdditiveShift(delta, ...)` | α(a + δ, x) − α(a, x) | Continuous-treatment shift effect |
 | `LocalShift(delta, threshold, ...)` | 1(a < threshold) · (α(a + δ, x) − α(a, x)) | LASE *partial-estimand* surface; same caveat as ATT |
 
-`StochasticIntervention` previously appeared here; it is currently being rewritten and will return.
-
 ## Save and load
 
 Two paths, depending on what you need.

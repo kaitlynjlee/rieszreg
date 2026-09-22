@@ -39,13 +39,16 @@ class RieszBooster(RieszEstimator):
     max_depth : int, default=4
     reg_lambda : float, default=1.0
     subsample : float, default=1.0
-    early_stopping_rounds : int or None
-        If set, requires either `validation_fraction>0` or `eval_set=...` at
-        fit time.
-    validation_fraction : float, default=0.0
-        Fraction of training data held out internally for early stopping.
-    init : float, "m1", or None
-        α-space initialization. None defers to `loss.default_init_alpha()`.
+    early_stopping_rounds : int or None, default=None
+        Stop adding trees once the held-out loss hasn't improved for this
+        many rounds. ``None`` fits all ``n_estimators`` trees.
+    validation_fraction : float, default=0.1
+        Fraction of the training rows held out for early stopping. Only used
+        when ``early_stopping_rounds`` is set and no ``eval_set`` is passed
+        to ``fit``.
+    init : float or None
+        α-space starting value. ``None`` (default) starts from the constant
+        that minimizes the Riesz loss.
     random_state : int, default=0
     """
 
@@ -60,8 +63,8 @@ class RieszBooster(RieszEstimator):
         reg_lambda: float = 1.0,
         subsample: float = 1.0,
         early_stopping_rounds: int | None = None,
-        validation_fraction: float = 0.0,
-        init: float | str | None = None,
+        validation_fraction: float = 0.1,
+        init: float | None = None,
         random_state: int = 0,
     ):
         super().__init__(
@@ -126,7 +129,9 @@ class RieszBooster(RieszEstimator):
             n_estimators=self.n_estimators,
             learning_rate=self.learning_rate,
             early_stopping_rounds=self.early_stopping_rounds,
-            validation_fraction=self.validation_fraction,
+            validation_fraction=(
+                self.validation_fraction if self.early_stopping_rounds is not None else 0.0
+            ),
         )
 
     def _backend_hyperparams(self) -> dict:
@@ -160,7 +165,7 @@ class RieszBooster(RieszEstimator):
             reg_lambda=hyperparameters.get("reg_lambda", 1.0),
             subsample=hyperparameters.get("subsample", 1.0),
             early_stopping_rounds=hyperparameters.get("early_stopping_rounds"),
-            validation_fraction=hyperparameters.get("validation_fraction", 0.0),
+            validation_fraction=hyperparameters.get("validation_fraction", 0.1),
             init=hyperparameters.get("init"),
             random_state=hyperparameters.get("random_state", 0),
         )

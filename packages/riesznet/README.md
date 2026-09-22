@@ -154,7 +154,7 @@ Without the flush, `future` reuses workers across plans of the same shape and th
 
 ## What works today (v0.0.1)
 
-- All five built-in estimands (`ATE`, `ATT`, `TSM`, `AdditiveShift`, `LocalShift`) plus custom estimands. `StochasticIntervention` is currently stubbed in rieszreg and will be reintroduced.
+- All five built-in estimands (`ATE`, `ATT`, `TSM`, `AdditiveShift`, `LocalShift`) plus custom estimands.
 - All four built-in losses (`SquaredLoss`, `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss`) with autograd-checked gradient parity to the analytic loss spec.
 - Architecture flexibility via `TorchBackend(module_factory=..., optimizer_factory=...)`.
 - sklearn composition: `clone`, `GridSearchCV`, `cross_val_predict`, `Pipeline`.

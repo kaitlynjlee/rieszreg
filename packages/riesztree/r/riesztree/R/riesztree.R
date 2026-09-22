@@ -54,8 +54,7 @@ use_python_riesztree <- function(python = NULL, required = TRUE) {
 #' `min_samples_leaf`, `min_weight_fraction_leaf`, `max_leaf_nodes`,
 #' `max_features`, `growth_policy`, `min_impurity_decrease`, `ccp_alpha`,
 #' `early_stopping_rounds`, `validation_fraction`, `categorical_features`,
-#' `splitter`, `max_bins`. The v0.0.1 names `max_leaves` / `pruning_alpha`
-#' remain as deprecated aliases (emit `FutureWarning` from Python).
+#' `splitter`, `max_bins`.
 #'
 #' @export
 RieszTreeRegressor <- R6::R6Class(
@@ -79,10 +78,7 @@ RieszTreeRegressor <- R6::R6Class(
                           init = NULL,
                           random_state = 0L,
                           splitter = "exact",
-                          max_bins = 255L,
-                          # Deprecated aliases for v0.0.1 compatibility.
-                          max_leaves = NULL,
-                          pruning_alpha = NULL) {
+                          max_bins = 255L) {
       args <- list(
         estimand = estimand,
         max_depth = as.integer(max_depth),
@@ -107,10 +103,6 @@ RieszTreeRegressor <- R6::R6Class(
       if (!is.null(categorical_features)) {
         args$categorical_features <- as.integer(categorical_features)
       }
-      # Deprecated aliases — pass through if explicitly set; Python emits
-      # the FutureWarning.
-      if (!is.null(max_leaves)) args$max_leaves <- as.integer(max_leaves)
-      if (!is.null(pruning_alpha)) args$pruning_alpha <- pruning_alpha
       py_object <- do.call(.module()$RieszTreeRegressor, args)
       super$initialize(py_object = py_object, estimand = estimand)
     }

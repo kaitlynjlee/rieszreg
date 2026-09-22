@@ -112,15 +112,17 @@ RieszBooster <- R6::R6Class(
     #' @param loss Loss spec; default `SquaredLoss()`.
     #' @param n_estimators,learning_rate,max_depth,reg_lambda,subsample
     #'   Hyperparameters.
-    #' @param early_stopping_rounds,validation_fraction Early-stopping config.
-    #' @param init Initial alpha (NULL → loss default; "m1" → mean of m(z,1); float → that value).
+    #' @param early_stopping_rounds,validation_fraction Early stopping: stop after
+    #'   `early_stopping_rounds` rounds without held-out improvement, holding
+    #'   out `validation_fraction` of the rows (only used when early stopping is on).
+    #' @param init Initial alpha (NULL: the loss-minimizing constant; or a number).
     #' @param random_state Random seed.
     initialize = function(estimand,
                           backend = NULL, loss = NULL,
                           n_estimators = 200L, learning_rate = 0.05,
                           max_depth = 4L, reg_lambda = 1.0, subsample = 1.0,
                           early_stopping_rounds = NULL,
-                          validation_fraction = 0.0,
+                          validation_fraction = 0.1,
                           init = NULL,
                           random_state = 0L) {
       args <- list(
@@ -149,8 +151,7 @@ RieszBooster <- R6::R6Class(
     #' `n_estimators_grid[j]` trees. Columns are labelled `"trees=<k>"`.
     #'
     #' Each grid entry must be in `[1, booster.num_boosted_rounds()]`.
-    #' @param Z Predictor data.frame (treatment + covariates in
-    #'   `feature_keys` order).
+    #' @param Z Predictor data.frame (treatment + covariates, matched by name).
     #' @param n_estimators_grid Integer vector of tree counts.
     predict_path = function(Z, n_estimators_grid) {
       grid <- as.integer(n_estimators_grid)

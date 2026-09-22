@@ -50,8 +50,9 @@ class KernelRieszRegressor(RieszEstimator):
         Random Fourier features (for "rff").
     cg_tol : float, default=1e-6
     cg_max_iter : int, default=200
-    init : float, "m1", or None
-        α-space initialization. None defers to `loss.default_init_alpha()`.
+    init : float or None
+        α-space starting value. ``None`` (default) starts from the constant
+        that minimizes the Riesz loss.
     validation_fraction : float, default=0.2
         Hold out this fraction of the training data for λ selection.
     keep_path : bool, default=True
@@ -72,7 +73,7 @@ class KernelRieszRegressor(RieszEstimator):
         n_features: int = 1024,
         cg_tol: float = 1e-6,
         cg_max_iter: int = 200,
-        init: float | str | None = None,
+        init: float | None = None,
         validation_fraction: float = 0.2,
         keep_path: bool = True,
         random_state: int = 0,
@@ -123,11 +124,10 @@ class KernelRieszRegressor(RieszEstimator):
 
     # ---- fit override exposes lambda_ ----
 
-    def fit(self, Z, y=None, eval_set=None) -> "KernelRieszRegressor":
-        super().fit(Z, y=y, eval_set=eval_set)
-        # Convenience: surface the chosen λ on the regressor.
-        if self.predictor_.result.extra is not None:
-            self.lambda_ = self.predictor_.result.extra.get("lambda")
+    def fit(self, Z, y=None, eval_set=None, eval_y=None) -> "KernelRieszRegressor":
+        super().fit(Z, y=y, eval_set=eval_set, eval_y=eval_y)
+        # The regularization strength λ selected from lambda_grid.
+        self.lambda_ = (self.predictor_.result.extra or {}).get("lambda")
         return self
 
     def diagnose(self, Z, **kwargs):

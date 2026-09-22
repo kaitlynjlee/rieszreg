@@ -62,8 +62,8 @@ alpha_hat = est.predict(df)
 - **`RieszTreeRegressor(BaseEstimator)`** — sklearn-compatible. Composes with `GridSearchCV`, `cross_val_predict`, `clone`, `Pipeline`.
 - **All five built-in estimands** via the rieszreg re-exports: `ATE`, `ATT`, `TSM`, `AdditiveShift`, `LocalShift`. Custom `FiniteEvalEstimand`s also work — the augmentation-style splitter handles them without a sieve.
 - **All four built-in losses**: `SquaredLoss` (default), `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss`. Splits are loss-aware: each loss has its own analytic per-leaf objective and the splitter optimises the corresponding gain.
-- **Two growth policies**: `growth_policy="depthwise"` (default; recursive depth-first) and `"leafwise"` (best-first growth, capped by `max_leaves`).
-- **Cost-complexity pruning** via `pruning_alpha > 0`. Default off.
+- **Two growth policies**: `growth_policy="depthwise"` (default; recursive depth-first) and `"leafwise"` (best-first growth, capped by `max_leaf_nodes`).
+- **Cost-complexity pruning** via `ccp_alpha > 0`. Default off.
 - **Early stopping** via `early_stopping_rounds` + `validation_fraction`. Default off.
 - **Categorical predictors** via `categorical_features=(col_idx, ...)`. Splits use the standard CART trick: order levels by within-level α* and sweep contiguous splits.
 - **Save / load**: directory format with JSON predictor + JSON metadata. Built-in estimands round-trip automatically.
@@ -95,7 +95,7 @@ alpha_hat = est.predict(df)
 | `splitter` | `"exact"` | One of `"exact"`, `"hist"`, `"random"`, `"python"`. See the Splitter modes section below. |
 | `max_bins` | 255 | Bins per feature when `splitter="hist"`. Sklearn HGB convention; fits in `uint8`. |
 
-The v0.0.1 names `max_leaves` and `pruning_alpha` are accepted as deprecated aliases for `max_leaf_nodes` and `ccp_alpha`; passing them emits a `FutureWarning` and behaves identically. `splitter="python"` is also deprecated and will be removed in v0.0.3.
+`splitter="python"` is also deprecated and will be removed in v0.0.3.
 
 ## Splitter modes
 

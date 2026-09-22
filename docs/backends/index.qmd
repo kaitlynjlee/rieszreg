@@ -2,7 +2,7 @@
 title: "Backends"
 ---
 
-A backend fits the Riesz representer for a given estimand and loss. Four implementation packages ship today; each slots into `RieszEstimator` through one of two Protocols. `rieszboost` and `krrr` consume the augmented dataset of evaluation points with weights $(D_r, C_r)$ (`Backend.fit_augmented`). `forestriesz` ships *both*: an augmentation-style `AugForestRieszRegressor` that works on every estimand without per-estimand configuration (`Backend.fit_augmented`), and a moment-style `ForestRieszRegressor` that consumes original rows plus a user-supplied list of basis functions (`MomentBackend.fit_rows`) and supports honest-split confidence intervals. `riesznet` consumes original rows plus per-row moments via `MomentBackend.fit_rows`, training a PyTorch model with autograd.
+A backend fits the Riesz representer for a given estimand and loss. Five implementation packages ship today; each slots into `RieszEstimator` through one of two Protocols. `rieszboost` and `krrr` consume the augmented dataset of evaluation points with weights $(D_r, C_r)$ (`Backend.fit_augmented`). `forestriesz` ships *both*: an augmentation-style `AugForestRieszRegressor` that works on every estimand without per-estimand configuration (`Backend.fit_augmented`), and a moment-style `ForestRieszRegressor` that consumes original rows plus a user-supplied list of basis functions (`MomentBackend.fit_rows`) and supports honest-split confidence intervals. `riesznet` consumes original rows plus per-row moments via `MomentBackend.fit_rows`, training a PyTorch model with autograd.
 
 ## Pick a backend
 
@@ -16,7 +16,23 @@ A backend fits the Riesz representer for a given estimand and loss. Four impleme
 | **Loss support** | `SquaredLoss`, `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss` | `SquaredLoss` only (today) | All four for the augmented flavor; `SquaredLoss` only for the moment flavor | `SquaredLoss`, `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss` |
 | **Scaling** | Linear in $n$ via xgboost | $O(n^3)$ direct; Nyström + RFF + Falkon for larger $n$ | $O(n \log n)$ per tree | Per-epoch cost is one forward pass over $n + \sum_i k_i$ points; scales to GPU |
 | **Confidence intervals** | No | No | Yes — `predict_interval` on single-basis fits (moment-style only) | No |
-| **Convenience class** | `rieszboost.RieszBooster` | `krrr.KernelRieszRegressor` | `forestriesz.AugForestRieszRegressor` (works on every estimand without per-estimand configuration) and `forestriesz.ForestRieszRegressor` (moment-style; user supplies a list of basis functions; supports CIs) | `riesznet.RieszNet` (default MLP); `riesznet.TorchBackend` for arbitrary `nn.Module` factories |
+| **Convenience class** | `rieszboost.RieszBooster` | `krrr.KernelRieszRegressor` | `forestriesz.AugForestRieszRegressor` (recommended; works on every estimand) and `forestriesz.ForestRieszRegressor` (the published ForestRiesz method, kept for comparison; supports CIs) | `riesznet.RieszNet` (default MLP); `riesznet.TorchBackend` for arbitrary `nn.Module` factories |
+
+A fifth learner, [`riesztree`](tree.qmd), fits a single decision tree (`RieszTreeRegressor`). It is fast and easy to inspect, and it supports all four losses.
+
+### The same setting under different names
+
+Each learner names its settings after the library it follows (xgboost, sklearn, PyTorch). This table lines them up.
+
+| Setting | `RieszBooster` | `KernelRieszRegressor` | `AugForestRieszRegressor` | `RieszTreeRegressor` | `RieszNet` |
+|---|---|---|---|---|---|
+| Amount of fitting | `n_estimators` (trees) | — | `n_estimators` (trees) | `max_depth`, `max_leaf_nodes` | `epochs` |
+| Step size | `learning_rate` | — | — | — | `learning_rate` |
+| Regularization | `reg_lambda`, `max_depth` | `lambda_grid` (chosen automatically) | `min_samples_leaf`, `max_depth` | `min_samples_leaf`, `ccp_alpha` | `weight_decay`, `dropout` |
+| Early stopping | `early_stopping_rounds` | — | — | `early_stopping_rounds` | `early_stopping_rounds` |
+| Held-out fraction | `validation_fraction=0.1` | `validation_fraction=0.2` | — | `validation_fraction=0.1` | `validation_fraction=0.1` |
+
+`validation_fraction` is used only when early stopping is on. `KernelRieszRegressor` always holds out rows, because it picks λ from `lambda_grid` by held-out loss. Passing `eval_set=` to `fit` replaces the internal split in every learner.
 
 ## Compose explicitly
 
@@ -70,7 +86,7 @@ est = RieszEstimator(
 )
 ```
 
-The convenience classes are thin subclasses that bake in the backend and surface backend-specific hyperparameters as constructor args, so that they fit cleanly into `GridSearchCV`. See the [boosting](boosting.qmd), [kernel](kernel.qmd), [forest](forest.qmd), and [neural](neural.qmd) pages for each.
+The convenience classes are thin subclasses that bake in the backend and surface backend-specific hyperparameters as constructor args, so that they fit cleanly into `GridSearchCV`. See the [boosting](boosting.qmd), [kernel](kernel.qmd), [forest](forest.qmd), [tree](tree.qmd), and [neural](neural.qmd) pages for each.
 
 ## Adding a backend
 

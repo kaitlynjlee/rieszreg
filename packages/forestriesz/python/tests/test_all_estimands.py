@@ -75,13 +75,13 @@ def test_additive_shift_constant_raises(df_continuous):
     # Custom estimand with no default sieve → auto falls back to constant →
     # row-constant check fires.
     est = _make(AdditiveShift(delta=0.5))
-    with pytest.raises(ValueError, match="row-constant"):
+    with pytest.raises(ValueError, match="AugForestRieszRegressor"):
         est.fit(df_continuous)
 
 
 def test_local_shift_constant_raises(df_continuous):
     est = _make(LocalShift(delta=0.5, threshold=0.0))
-    with pytest.raises(ValueError, match="row-constant"):
+    with pytest.raises(ValueError, match="AugForestRieszRegressor"):
         est.fit(df_continuous)
 
 

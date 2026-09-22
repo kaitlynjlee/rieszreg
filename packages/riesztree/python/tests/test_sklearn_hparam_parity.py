@@ -1,10 +1,8 @@
 """sklearn-parity hyperparameters: max_features, min_impurity_decrease,
-min_weight_fraction_leaf, random_state, plus the deprecation aliases for
-``pruning_alpha`` (→ ``ccp_alpha``) and ``max_leaves`` (→ ``max_leaf_nodes``).
+min_weight_fraction_leaf, random_state.
 """
 from __future__ import annotations
 
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -150,73 +148,6 @@ def test_min_weight_fraction_leaf_zero_is_identity():
     a = RieszTreeRegressor(estimand=estimand, max_depth=4).fit(df).predict(df)
     b = RieszTreeRegressor(estimand=estimand, max_depth=4, min_weight_fraction_leaf=0.0).fit(df).predict(df)
     assert np.allclose(a, b)
-
-
-# ---------------------------------------------------------------------------
-# Deprecation aliases: pruning_alpha → ccp_alpha, max_leaves → max_leaf_nodes
-
-def test_pruning_alpha_alias_emits_future_warning():
-    df = _make_multi_x_df(n=300, p=4)
-    estimand = ATE(treatment="a", covariates=tuple(f"x{j}" for j in range(4)))
-    with pytest.warns(FutureWarning, match="pruning_alpha.*ccp_alpha"):
-        RieszTreeRegressor(estimand=estimand, max_depth=4, pruning_alpha=0.1).fit(df)
-
-
-def test_pruning_alpha_alias_matches_ccp_alpha_behavior():
-    df = _make_multi_x_df(n=400, p=4)
-    estimand = ATE(treatment="a", covariates=tuple(f"x{j}" for j in range(4)))
-    canonical = RieszTreeRegressor(estimand=estimand, max_depth=5, ccp_alpha=0.5).fit(df).predict(df)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        legacy = RieszTreeRegressor(estimand=estimand, max_depth=5, pruning_alpha=0.5).fit(df).predict(df)
-    assert np.allclose(canonical, legacy)
-
-
-def test_max_leaves_alias_emits_future_warning():
-    df = _make_multi_x_df(n=300, p=4)
-    estimand = ATE(treatment="a", covariates=tuple(f"x{j}" for j in range(4)))
-    with pytest.warns(FutureWarning, match="max_leaves.*max_leaf_nodes"):
-        RieszTreeRegressor(
-            estimand=estimand,
-            max_depth=4,
-            growth_policy="leafwise",
-            max_leaves=8,
-        ).fit(df)
-
-
-def test_max_leaves_alias_matches_max_leaf_nodes_behavior():
-    df = _make_multi_x_df(n=400, p=4)
-    estimand = ATE(treatment="a", covariates=tuple(f"x{j}" for j in range(4)))
-    canonical = RieszTreeRegressor(
-        estimand=estimand,
-        max_depth=10,
-        growth_policy="leafwise",
-        max_leaf_nodes=8,
-    ).fit(df).predict(df)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        legacy = RieszTreeRegressor(
-            estimand=estimand,
-            max_depth=10,
-            growth_policy="leafwise",
-            max_leaves=8,
-        ).fit(df).predict(df)
-    assert np.allclose(canonical, legacy)
-
-
-def test_no_alias_no_warning():
-    """Default construction with canonical names emits no FutureWarning."""
-    df = _make_multi_x_df(n=300, p=4)
-    estimand = ATE(treatment="a", covariates=tuple(f"x{j}" for j in range(4)))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", FutureWarning)
-        RieszTreeRegressor(
-            estimand=estimand,
-            max_depth=4,
-            ccp_alpha=0.1,
-            max_leaf_nodes=8,
-            growth_policy="leafwise",
-        ).fit(df)
 
 
 # ---------------------------------------------------------------------------

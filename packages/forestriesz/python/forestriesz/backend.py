@@ -218,19 +218,20 @@ class ForestRieszBackend:
             j_row_constant = bool(np.allclose(JJ - JJ[0:1], 0.0, atol=1e-12))
             a_row_constant = bool(np.allclose(A - A[0:1], 0.0, atol=1e-12))
             if j_row_constant and a_row_constant:
-                sieve_hint = (
-                    "riesz_feature_fns='auto' (the default)"
-                    if default_riesz_features(estimand) is not None
-                    else "a custom riesz_feature_fns list capturing the "
-                    "treatment / intervention structure of your estimand"
-                )
+                if default_riesz_features(estimand) is None:
+                    raise ValueError(
+                        f"ForestRieszRegressor (the reference ForestRiesz "
+                        f"implementation) can't fit {estimand.name} without a "
+                        "basis of treatment features. Use "
+                        "AugForestRieszRegressor, which works for every "
+                        "estimand with no extra setup, or pass your own "
+                        "riesz_feature_fns=[...] list."
+                    )
                 raise ValueError(
-                    f"Per-row moment A and Jacobian J are both row-constant "
-                    f"under the current basis for estimand {estimand.name!r}. "
-                    "The forest cannot learn α from row-constant moment data. "
-                    "This typically means the locally constant basis is being "
-                    "used with a built-in estimand whose moment doesn't depend "
-                    f"on W. Pass {sieve_hint} to use the locally linear sieve."
+                    f"ForestRieszRegressor can't learn α for {estimand.name} "
+                    "with riesz_feature_fns=None: every row gives the forest "
+                    "the same data. Keep the default riesz_feature_fns='auto', "
+                    "or use AugForestRieszRegressor."
                 )
 
         # 7. Choose split features.

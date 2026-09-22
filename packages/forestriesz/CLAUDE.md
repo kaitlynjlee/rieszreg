@@ -103,7 +103,7 @@ For TSM with `default_riesz_features([1{T=level}])`, A_i = 1 (constant), J_i = T
 
 ### Constant-basis degeneracy
 
-For all built-in estimands, `m(W; 1) = Σ coef` in the trace doesn't depend on W (e.g., ATE → 0, TSM → 1, AdditiveShift → 0). Under a constant basis both A and J are row-constant, so splits learn nothing. The backend detects this and raises with a hint to use `riesz_feature_fns="auto"` or a custom sieve. The default is `"auto"`, which resolves to `default_riesz_features(estimand)` automatically.
+For all built-in estimands, `m(W; 1) = Σ coef` in the trace doesn't depend on W (e.g., ATE → 0, TSM → 1, AdditiveShift → 0). Under a constant basis both A and J are row-constant, so splits learn nothing. The backend detects this and raises, pointing the user to `AugForestRieszRegressor` (or `riesz_feature_fns="auto"` / a custom sieve). The default is `"auto"`, which resolves to `default_riesz_features(estimand)` automatically.
 
 ### What's lazy-imported
 
@@ -122,7 +122,7 @@ For all built-in estimands, `m(W; 1) = Σ coef` in the trace doesn't depend on W
 ### Moment-style (`ForestRieszRegressor`)
 
 - sklearn-compatible. Composes with `GridSearchCV`, `cross_val_predict`, `clone`, `Pipeline`. Same `fit / predict / score / diagnose` surface as `RieszBooster` and `KernelRieszRegressor`.
-- All five built-in estimands. Custom `FiniteEvalEstimand`s also work; for difference-style functionals supply your own `riesz_feature_fns`. `StochasticIntervention` is currently stubbed in rieszreg and will be reintroduced.
+- All five built-in estimands. Custom `FiniteEvalEstimand`s also work; for difference-style functionals supply your own `riesz_feature_fns`.
 - Default `riesz_feature_fns` resolution: `riesz_feature_fns="auto"` (the default) picks `[1{A=0}, 1{A=1}]` for ATE/ATT, `[1{A=level}]` for TSM, falling back to constant for custom estimands.
 - Honest-split confidence intervals via `predict_interval(X, alpha)` for single-basis fits.
 - Loss: `SquaredLoss` only (closed-form per-leaf solve). KLLoss / BernoulliLoss / BoundedSquaredLoss raise `NotImplementedError`; planned for v2.
