@@ -11,12 +11,8 @@ import pandas as pd
 import pytest
 from sklearn.exceptions import NotFittedError
 
-from riesztree import (
-    ATE,
-    RieszTreeRegressor,
-    cost_complexity_pruning_path,
-    n_leaves,
-)
+from riesztree import ATE, RieszTreeRegressor
+from riesztree.pruning import cost_complexity_pruning_path
 
 
 def _make_df(n=600, p=4, seed=0):
@@ -129,14 +125,14 @@ def test_pruning_path_collapses_to_root():
     refit = RieszTreeRegressor(
         estimand=_ate(3), max_depth=6, ccp_alpha=last_alpha + 1e-9,
     ).fit(df)
-    assert n_leaves(refit.predictor_.tree) == 1
+    assert refit.get_n_leaves() == 1
 
 
 def test_pruning_path_does_not_mutate_input_tree():
     """The free function should leave the input tree unchanged."""
     df = _make_df(n=400, p=3)
     est = RieszTreeRegressor(estimand=_ate(3), max_depth=6).fit(df)
-    pre_n_leaves = n_leaves(est.predictor_.tree)
+    pre_n_leaves = est.get_n_leaves()
     cost_complexity_pruning_path(est.predictor_.tree, est.loss_)
-    post_n_leaves = n_leaves(est.predictor_.tree)
+    post_n_leaves = est.get_n_leaves()
     assert pre_n_leaves == post_n_leaves

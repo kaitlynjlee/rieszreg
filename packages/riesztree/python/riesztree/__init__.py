@@ -1,61 +1,28 @@
-"""riesztree: single-tree backend for the rieszreg meta-package.
+"""riesztree: single-tree Riesz regression.
 
-A single decision tree fit by greedy splits on the augmented Bregman-Riesz
-loss. Each leaf stores the closed-form per-leaf optimum
-``α_ℓ* = -C_ℓ / D_ℓ`` (loss-aware: projected to the loss's α-domain), so
-the same tree structure works for ``SquaredLoss``, ``KLLoss``,
-``BernoulliLoss``, and ``BoundedSquaredLoss``.
+`RieszTreeRegressor` fits one decision tree to the Riesz representer α̂ of
+a causal estimand. The tree is easy to inspect (``get_n_leaves()``,
+``get_depth()``, ``feature_importances_``) and works with every built-in
+loss.
 
+    from riesztree import RieszTreeRegressor, ATE
+    tree = RieszTreeRegressor(estimand=ATE(treatment="treated"), max_depth=4)
+    tree.fit(Z)                  # Z: treatment column + covariates
+    alpha_hat = tree.predict(Z)
+
+Every estimand, loss and diagnostic from ``rieszreg`` is re-exported here.
 Importing this module registers the predictor loader for
-``rieszreg.RieszEstimator.load`` to round-trip ``"riesztree"`` predictors.
+``rieszreg.RieszEstimator.load``.
 """
 
 from __future__ import annotations
 
-from rieszreg import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    BernoulliLoss,
-    BoundedSquaredLoss,
-    Estimand,
-    KLLoss,
-    LocalShift,
-    Loss,
-    SquaredLoss,
-    TSM,
-)
+from rieszreg.user_api import *  # noqa: F401,F403
+from rieszreg.user_api import __all__ as _shared
 
 from .backend import RieszTreeBackend
-from .diagnostics import TreeDiagnostics, diagnose_tree
+from .diagnostics import TreeDiagnostics
 from .estimator import RieszTreeRegressor
-from .predictor import RieszTreePredictor
-from .pruning import cost_complexity_prune, cost_complexity_pruning_path
-from .splitter import make_leaf_solvers
-from .tree import Node, feature_importance, max_depth, n_leaves
+from .predictor import RieszTreePredictor  # noqa: F401  (registers the loader)
 
-__all__ = [
-    "ATE",
-    "ATT",
-    "AdditiveShift",
-    "BernoulliLoss",
-    "BoundedSquaredLoss",
-    "Estimand",
-    "KLLoss",
-    "LocalShift",
-    "Loss",
-    "Node",
-    "RieszTreeBackend",
-    "RieszTreePredictor",
-    "RieszTreeRegressor",
-    "SquaredLoss",
-    "TSM",
-    "TreeDiagnostics",
-    "cost_complexity_prune",
-    "cost_complexity_pruning_path",
-    "diagnose_tree",
-    "feature_importance",
-    "make_leaf_solvers",
-    "max_depth",
-    "n_leaves",
-]
+__all__ = [*_shared, "RieszTreeRegressor", "RieszTreeBackend", "TreeDiagnostics"]

@@ -1,6 +1,6 @@
 import pytest
 
-from rieszboost.tracer import LinearForm, Tracer, trace
+from rieszreg.estimands.tracer import LinearForm, Tracer, trace
 from rieszreg import FiniteEvalEstimand
 
 

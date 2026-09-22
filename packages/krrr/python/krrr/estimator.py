@@ -130,6 +130,12 @@ class KernelRieszRegressor(RieszEstimator):
             self.lambda_ = self.predictor_.result.extra.get("lambda")
         return self
 
+    def diagnose(self, Z, **kwargs):
+        """Base diagnostics plus kernel extras: selected λ, number of
+        support points, effective degrees of freedom, condition number."""
+        from .diagnostics import diagnose_kernel
+        return diagnose_kernel(self, Z, **kwargs)
+
     def predict_path(
         self, Z, lambdas: Sequence[float] | None = None
     ) -> np.ndarray:

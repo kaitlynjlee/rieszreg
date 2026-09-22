@@ -131,7 +131,7 @@ def test_hist_grows_non_trivial_tree():
     one positive-gain split."""
     df = _make_df(n=800, p=3)
     est = RieszTreeRegressor(estimand=_ate(3), max_depth=4, splitter="hist").fit(df)
-    assert n_leaves(est.predictor_.tree) >= 2
+    assert est.get_n_leaves() >= 2
 
 
 def test_hist_smaller_max_bins_still_works():
@@ -192,5 +192,5 @@ def test_hist_handles_mixed_continuous_categorical():
         categorical_features=(0,),
     ).fit(df)
     a_hat = est.predict(df)
-    assert n_leaves(est.predictor_.tree) >= 2
+    assert est.get_n_leaves() >= 2
     assert np.isfinite(a_hat).all()

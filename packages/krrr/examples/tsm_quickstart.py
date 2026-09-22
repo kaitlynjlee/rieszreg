@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from krrr import TSM, Gaussian, KernelRieszRegressor, diagnose_kernel
+from krrr import TSM, Gaussian, KernelRieszRegressor
 
 
 def main() -> None:
@@ -39,7 +39,7 @@ def main() -> None:
     print(f"truth     range      : [{truth.min():.3f}, {truth.max():.3f}]")
     print(f"correlation w/ truth : {np.corrcoef(alpha_hat, truth)[0, 1]:.3f}")
     print()
-    print(diagnose_kernel(krr, df).summary())
+    print(krr.diagnose(df).summary())
 
 
 if __name__ == "__main__":

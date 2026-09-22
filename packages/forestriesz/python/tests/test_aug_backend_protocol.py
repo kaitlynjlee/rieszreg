@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from forestriesz import AugForestPredictor, AugForestRieszBackend
+from forestriesz import AugForestRieszBackend
+from forestriesz.aug_predictor import AugForestPredictor
 
 
 def test_aug_backend_exposes_fit_augmented_only():

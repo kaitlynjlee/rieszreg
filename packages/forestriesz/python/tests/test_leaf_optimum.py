@@ -11,12 +11,8 @@ import numpy as np
 import pandas as pd
 
 from rieszreg import trace
-from forestriesz import (
-    ForestRieszRegressor,
-    TSM,
-    ATE,
-    default_riesz_features,
-)
+from forestriesz import ForestRieszRegressor, TSM, ATE
+from forestriesz.feature_fns import default_riesz_features
 
 
 def _moments(rows, estimand, phi_fns):

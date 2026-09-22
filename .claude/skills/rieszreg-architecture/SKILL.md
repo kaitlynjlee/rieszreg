@@ -117,7 +117,8 @@ Hand-rolled fold loops are a code smell. Bespoke is reserved for things sklearn 
 - **`fit(Z, y=None)`** — `Z` is the predictor matrix (treatment + covariates), ndarray (columns matched to `estimand.feature_keys`) or DataFrame (matched by name). `y` is the per-row outcome vector (sklearn-style); built-in estimands ignore it, custom Y-dependent estimands read it.
 - **`predict(Z)`** returns shape `(n,)` array of α̂.
 - **`score(Z, y=None)`** returns `−mean(Riesz loss)` (sklearn higher-is-better convention).
-- **Public re-exports.** Each impl package's `__init__.py` re-exports the rieszreg primitives users typically need (estimand factories, loss factories, top-level estimator, `diagnose`, `LinearForm`, `Tracer`) plus its own backend factories and convenience class. The re-export list is invariant across the two backend Protocols — even moment-style packages re-export `LinearForm` and `Tracer`.
+- **Public re-exports.** Each impl package's `__init__.py` does `from rieszreg.user_api import *` and builds `__all__ = [*user_api.__all__, <own names>]`. `rieszreg/user_api.py` is the single list of user-facing names (estimands, losses, `RieszEstimator`, `riesz_scorer`, `diagnose`, `Diagnostics`, `LinearForm`, `Tracer`); add a name there, never per package. Impl packages add only their convenience class, backends, and diagnostics dataclass at top level; internals (predictors, solvers, tree helpers) stay in submodules. Learner-specific diagnostics are an `estimator.diagnose(Z)` override returning a `Diagnostics` subclass, not a free `diagnose_<pkg>` function.
+- **Estimand columns.** Built-in estimands default `covariates=None` (every non-treatment column); `RieszEstimator.fit` resolves them via `estimand.bind(columns)` and stores the result as `estimand_`. Post-fit code reads `self.estimand_` / `self._features(Z)`, never `self.estimand.feature_keys`.
 
 ## 8. Lazy imports for optional heavy deps
 

@@ -17,13 +17,8 @@ import pytest
 
 from rieszreg.testing import dgps
 
-from forestriesz import (
-    ATE,
-    AugForestRieszRegressor,
-    ForestRieszRegressor,
-    TSM,
-    default_riesz_features,
-)
+from forestriesz import ATE, AugForestRieszRegressor, ForestRieszRegressor, TSM
+from forestriesz.feature_fns import default_riesz_features
 
 
 def _benchmark_one(make_moment, make_aug, dgp, n, seed=0):

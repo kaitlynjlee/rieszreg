@@ -10,7 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from forestriesz import ATE, ForestRieszRegressor, TSM, default_riesz_features
+from forestriesz import ATE, ForestRieszRegressor, TSM
+from forestriesz.feature_fns import default_riesz_features
 
 
 def test_round_trip_locally_constant(tmp_path, logistic_tsm_df):

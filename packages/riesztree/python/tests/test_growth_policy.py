@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from riesztree import ATE, RieszTreeRegressor, n_leaves
+from riesztree import ATE, RieszTreeRegressor
 
 
 def test_depthwise_respects_max_depth(linear_gaussian_ate, covariate_keys):
@@ -16,7 +16,7 @@ def test_depthwise_respects_max_depth(linear_gaussian_ate, covariate_keys):
     )
     est.fit(df)
     # depth ≤ 3 ⇒ leaves ≤ 2^3 = 8.
-    assert n_leaves(est.predictor_.tree) <= 8
+    assert est.get_n_leaves() <= 8
 
 
 def test_leafwise_respects_max_leaf_nodes(linear_gaussian_ate, covariate_keys):
@@ -29,7 +29,7 @@ def test_leafwise_respects_max_leaf_nodes(linear_gaussian_ate, covariate_keys):
         max_depth=20,  # don't let depth bind
     )
     est.fit(df)
-    assert n_leaves(est.predictor_.tree) <= 12
+    assert est.get_n_leaves() <= 12
 
 
 def test_invalid_growth_policy_raises(linear_gaussian_ate, covariate_keys):

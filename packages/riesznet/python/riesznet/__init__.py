@@ -1,81 +1,35 @@
-"""riesznet: neural-network backend for the rieszreg meta-package.
+"""riesznet: neural-network Riesz regression (PyTorch).
 
-Implements the moment-style ``MomentBackend.fit_rows`` entry point with a
-PyTorch training loop. Trains the Riesz representer α(x) of a linear
-functional θ(P) = E[m(Z, g₀)] by minimizing the per-row Bregman-Riesz loss
+`RieszNet` trains a small neural network (an MLP) to estimate the Riesz
+representer α̂ of a causal estimand:
 
-    L_i = ψ(α(x_i)) − Σ_j coef_j · φ'(α(point_j))
+    from riesznet import RieszNet, ATE
+    net = RieszNet(estimand=ATE(treatment="treated"), epochs=200)
+    net.fit(Z)                   # Z: treatment column + covariates
+    alpha_hat = net.predict(Z)
 
-where ``(coef_j, point_j)`` come from ``rieszreg.trace(estimand, row_i)``.
+Custom architectures: build a ``TorchBackend`` and pass it to
+``RieszEstimator(estimand, backend=...)``.
 
-Importing ``riesznet.backend`` (which happens lazily on first attribute
-access here, e.g. ``riesznet.RieszNet``) registers the predictor loader
-for ``rieszreg.RieszEstimator.load`` to round-trip ``"riesznet"`` predictors.
-
-    from riesznet import RieszNet
-    from rieszreg import ATE
-
-    est = RieszNet(estimand=ATE(), epochs=200, learning_rate=1e-3)
-    est.fit(df)
-    alpha_hat = est.predict(df)
+Every estimand, loss and diagnostic from ``rieszreg`` is re-exported here.
+torch loads lazily, on first use of ``RieszNet`` / ``TorchBackend``.
 """
 
 from __future__ import annotations
 
-# Re-export the rieszreg primitives users will reach for here. (rieszreg
-# does not pull torch on import.)
-from rieszreg import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    BernoulliLoss,
-    BoundedSquaredLoss,
-    Diagnostics,
-    Estimand,
-    KLLoss,
-    LinearForm,
-    LocalShift,
-    Loss,
-    SquaredLoss,
-    TSM,
-    Tracer,
-    trace,
-)
+from rieszreg.user_api import *  # noqa: F401,F403
+from rieszreg.user_api import __all__ as _shared
+from rieszreg.backends import register_predictor_loader as _register
 
-__all__ = [
-    # Local
-    "RieszNet",
-    "TorchBackend",
-    "TorchPredictor",
-    "build_mlp",
-    "build_adam",
-    # Re-exports from rieszreg
-    "ATE",
-    "ATT",
-    "AdditiveShift",
-    "BernoulliLoss",
-    "BoundedSquaredLoss",
-    "Diagnostics",
-    "Estimand",
-    "KLLoss",
-    "LinearForm",
-    "LocalShift",
-    "Loss",
-    "SquaredLoss",
-    "TSM",
-    "Tracer",
-    "trace",
-]
+# So `RieszEstimator.load` works after `import riesznet` alone, without
+# importing torch until a saved model is actually loaded.
+_register("riesznet", "riesznet.backend:TorchPredictor.load")
+
+__all__ = [*_shared, "RieszNet", "TorchBackend", "build_mlp", "build_adam"]
 
 
-# Defer torch import until a torch-using symbol is actually accessed. Mirrors
-# rieszboost's __init__.py. Two consequences:
-#   1. `import riesznet` alone does not load torch / libomp, so users who
-#      `import riesznet` next to `import rieszboost` for symbol access only
-#      do not trigger the multi-libomp-in-one-process condition.
-#   2. The "riesznet" predictor loader registers on first access of any
-#      lazy symbol (which imports `riesznet.backend`); a fresh `import
-#      riesznet` is no longer enough to register the loader.
+# Defer torch import until a torch-using symbol is accessed, so importing
+# riesznet next to rieszboost doesn't map two libomp copies into one process.
 _LAZY = {
     "RieszNet": ("estimator", "RieszNet"),
     "TorchBackend": ("backend", "TorchBackend"),

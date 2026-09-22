@@ -19,7 +19,10 @@ from sklearn.utils.validation import check_is_fitted
 
 from rieszreg import Estimand, Loss, RieszEstimator, SquaredLoss
 
+import numpy as np
+
 from .backend import RieszTreeBackend
+from .tree import feature_importance, max_depth, n_leaves
 
 
 class RieszTreeRegressor(RieszEstimator):
@@ -198,6 +201,29 @@ class RieszTreeRegressor(RieszEstimator):
         super().fit(Z, y=y, eval_set=eval_set, eval_y=eval_y)
         self.predictor_.feature_keys = tuple(self.estimand_.feature_keys)
         return self
+
+    def get_n_leaves(self) -> int:
+        """Number of leaves of the fitted tree (as in sklearn trees)."""
+        check_is_fitted(self, "predictor_")
+        return n_leaves(self.predictor_.tree)
+
+    def get_depth(self) -> int:
+        """Depth of the fitted tree (as in sklearn trees)."""
+        check_is_fitted(self, "predictor_")
+        return max_depth(self.predictor_.tree)
+
+    @property
+    def feature_importances_(self) -> np.ndarray:
+        """Share of total split gain attributed to each column of
+        ``feature_names_in_`` (sums to 1 unless the tree is a single leaf)."""
+        check_is_fitted(self, "predictor_")
+        return feature_importance(self.predictor_.tree, self.n_features_in_)
+
+    def diagnose(self, Z, **kwargs):
+        """Base diagnostics plus tree extras: number of leaves, depth,
+        mean leaf size and feature importances."""
+        from .diagnostics import diagnose_tree
+        return diagnose_tree(self, Z, **kwargs)
 
     def cost_complexity_pruning_path(self, Z=None, y=None):
         """Cost-complexity pruning path (sklearn convention).

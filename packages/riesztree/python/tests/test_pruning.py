@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from riesztree import ATE, RieszTreeRegressor, n_leaves
+from riesztree import ATE, RieszTreeRegressor
 
 
 def test_pruning_reduces_leaves(linear_gaussian_ate, covariate_keys):
@@ -12,7 +12,7 @@ def test_pruning_reduces_leaves(linear_gaussian_ate, covariate_keys):
     estimand = ATE(treatment="a", covariates=covariate_keys)
     base = RieszTreeRegressor(estimand=estimand, max_depth=8, ccp_alpha=0.0).fit(df)
     pruned = RieszTreeRegressor(estimand=estimand, max_depth=8, ccp_alpha=0.5).fit(df)
-    assert n_leaves(pruned.predictor_.tree) <= n_leaves(base.predictor_.tree)
+    assert pruned.get_n_leaves() <= base.get_n_leaves()
 
 
 def test_pruning_zero_is_identity(linear_gaussian_ate, covariate_keys):
@@ -32,4 +32,4 @@ def test_huge_pruning_collapses_to_root(linear_gaussian_ate, covariate_keys):
     pruned = RieszTreeRegressor(
         estimand=estimand, max_depth=6, ccp_alpha=1e9
     ).fit(df)
-    assert n_leaves(pruned.predictor_.tree) == 1
+    assert pruned.get_n_leaves() == 1

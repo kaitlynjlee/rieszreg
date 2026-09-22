@@ -10,8 +10,8 @@ from sklearn.exceptions import NotFittedError
 import rieszboost
 from rieszboost import RieszBooster
 from rieszboost.backends import SklearnBackend
-from rieszboost.estimand import FiniteEvalEstimand
-from rieszboost.losses import KLLoss
+from rieszreg.estimands import FiniteEvalEstimand
+from rieszreg.losses import KLLoss
 
 
 def _logit(z):

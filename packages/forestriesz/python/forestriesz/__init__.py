@@ -1,55 +1,38 @@
-"""forestriesz: random-forest backend for the rieszreg meta-package.
+"""forestriesz: random-forest Riesz regression.
 
-Implements the locally constant and locally linear ForestRiesz estimators of
-Chernozhukov, Newey, Quintas-Martínez, Syrgkanis (ICML 2022) on top of
-EconML's GRF infrastructure, plugged into rieszreg via the ``MomentBackend``
-entry point so each tree fits on the n original rows (no augmentation
-blow-up).
+Two forest learners:
 
-Importing this module registers the predictor loader for
-``rieszreg.RieszEstimator.load`` to round-trip ``"forestriesz"`` predictors.
+- ``AugForestRieszRegressor`` — the recommended one. Works for every
+  estimand and every built-in loss with no extra setup.
+- ``ForestRieszRegressor`` — the reference implementation of ForestRiesz
+  (Chernozhukov, Newey, Quintas-Martínez, Syrgkanis, ICML 2022) on EconML's
+  GRF, kept for comparison. Supports ATE / ATT / TSM out of the box and
+  honest confidence intervals via ``predict_interval``.
+
+    from forestriesz import AugForestRieszRegressor, ATE
+    forest = AugForestRieszRegressor(estimand=ATE(treatment="treated"))
+    forest.fit(Z)                  # Z: treatment column + covariates
+    alpha_hat = forest.predict(Z)
+
+Every estimand, loss and diagnostic from ``rieszreg`` is re-exported here.
 """
 
 from __future__ import annotations
 
-# Re-export the rieszreg primitives users will reach for here.
-from rieszreg import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    Estimand,
-    LocalShift,
-    Loss,
-    SquaredLoss,
-    TSM,
-)
+from rieszreg.user_api import *  # noqa: F401,F403
+from rieszreg.user_api import __all__ as _shared
 
 from .aug_backend import AugForestRieszBackend
 from .aug_estimator import AugForestRieszRegressor
-from .aug_predictor import AugForestPredictor
 from .backend import ForestRieszBackend
-from .diagnostics import ForestDiagnostics, diagnose_forest
+from .diagnostics import ForestDiagnostics
 from .estimator import ForestRieszRegressor
-from .feature_fns import default_riesz_features, default_split_feature_indices
-from .predictor import ForestPredictor
 
 __all__ = [
-    "ATE",
-    "ATT",
-    "AdditiveShift",
-    "AugForestPredictor",
-    "AugForestRieszBackend",
+    *_shared,
     "AugForestRieszRegressor",
-    "Estimand",
-    "ForestDiagnostics",
-    "ForestPredictor",
-    "ForestRieszBackend",
+    "AugForestRieszBackend",
     "ForestRieszRegressor",
-    "LocalShift",
-    "Loss",
-    "SquaredLoss",
-    "TSM",
-    "default_riesz_features",
-    "default_split_feature_indices",
-    "diagnose_forest",
+    "ForestRieszBackend",
+    "ForestDiagnostics",
 ]

@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from krrr import Gaussian, KernelRieszRegressor, LocalShift, diagnose_kernel
+from krrr import Gaussian, KernelRieszRegressor, LocalShift
 
 
 def main() -> None:
@@ -47,7 +47,7 @@ def main() -> None:
     print(f"selected lambda      : {krr.lambda_:.4g}")
     print(f"alpha_hat range      : [{alpha_hat.min():.3f}, {alpha_hat.max():.3f}]")
     print()
-    print(diagnose_kernel(krr, df).summary())
+    print(krr.diagnose(df).summary())
 
 
 if __name__ == "__main__":

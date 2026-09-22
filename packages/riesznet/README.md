@@ -21,8 +21,7 @@ If you also use `rieszboost` in the same Python process, the macOS pip wheels of
 ```python
 import numpy as np
 import pandas as pd
-from riesznet import RieszNet
-from rieszreg import ATE
+from riesznet import RieszNet, ATE
 
 # Toy ATE: A ~ Bernoulli(σ(0.5x)), X ~ N(0,1).
 rng = np.random.default_rng(0)

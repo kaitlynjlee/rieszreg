@@ -4,7 +4,7 @@ import pytest
 
 import rieszboost
 from rieszboost import RieszBooster
-from rieszboost.diagnostics import diagnose
+from rieszreg.diagnostics import diagnose
 
 
 def test_diagnose_from_array():

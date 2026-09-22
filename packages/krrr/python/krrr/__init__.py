@@ -7,17 +7,21 @@ Reuses ``rieszreg``'s ``Estimand``, ``Tracer``, ``AugmentedDataset``,
 ``Loss``, ``Diagnostics``, and sklearn glue. The kernel solve plugs in
 through the ``Backend`` Protocol from ``rieszreg``.
 
-    from rieszreg import ATE
-    from krrr import KernelRieszRegressor, Gaussian
+    from krrr import KernelRieszRegressor, ATE
 
-    krr = KernelRieszRegressor(estimand=ATE(treatment="a", covariates=("x",)))
-    krr.fit(df)
-    alpha_hat = krr.predict(df)
-    print(krr.diagnose(df).summary())
+    krr = KernelRieszRegressor(estimand=ATE(treatment="a"))
+    krr.fit(Z)                 # Z: treatment column + covariates
+    alpha_hat = krr.predict(Z)
+    print(krr.diagnose(Z).summary())
+
+Every estimand, loss and diagnostic from ``rieszreg`` is re-exported here.
 """
 
+from rieszreg.user_api import *  # noqa: F401,F403
+from rieszreg.user_api import __all__ as _shared
+
 from .backend import KernelRidgeBackend
-from .diagnostics import KernelDiagnostics, diagnose_kernel
+from .diagnostics import KernelDiagnostics
 from .estimator import KernelRieszRegressor
 from .kernels import (
     Gaussian,
@@ -29,32 +33,13 @@ from .kernels import (
     Scaled,
     Sum,
     Tensor,
-    kernel_from_spec,
-)
-from .predictor import KernelPredictor
-from .solvers import SolveResult, auto_choose, get_solver
-
-# Re-export common rieszreg symbols so users can write `krrr.ATE`, etc.,
-# without needing a second import line.
-from rieszreg import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    Diagnostics,
-    Estimand,
-    FiniteEvalEstimand,
-    LocalShift,
-    Loss,
-    SquaredLoss,
-    TSM,
 )
 
 __all__ = [
-    # Estimator
+    *_shared,
     "KernelRieszRegressor",
     "KernelRidgeBackend",
-    "KernelPredictor",
-    # Kernels
+    "KernelDiagnostics",
     "Kernel",
     "Gaussian",
     "Matern",
@@ -64,23 +49,4 @@ __all__ = [
     "Sum",
     "Product",
     "Scaled",
-    "kernel_from_spec",
-    # Solvers
-    "SolveResult",
-    "get_solver",
-    "auto_choose",
-    # Diagnostics
-    "KernelDiagnostics",
-    "diagnose_kernel",
-    # Re-exports from rieszreg
-    "ATE",
-    "ATT",
-    "AdditiveShift",
-    "Diagnostics",
-    "Estimand",
-    "FiniteEvalEstimand",
-    "LocalShift",
-    "Loss",
-    "SquaredLoss",
-    "TSM",
 ]

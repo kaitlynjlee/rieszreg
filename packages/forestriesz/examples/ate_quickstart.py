@@ -13,12 +13,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from forestriesz import (
-    ATE,
-    ForestRieszRegressor,
-    default_riesz_features,
-    diagnose_forest,
-)
+from forestriesz import ATE, ForestRieszRegressor
+from forestriesz.feature_fns import default_riesz_features
 
 
 def main() -> None:
@@ -47,7 +43,7 @@ def main() -> None:
     print(f"correlation w/ truth : {np.corrcoef(alpha_hat, truth)[0, 1]:.3f}")
     print(f"RMSE vs truth        : {float(np.sqrt(np.mean((alpha_hat - truth) ** 2))):.3f}")
     print()
-    print(diagnose_forest(fr, df).summary())
+    print(fr.diagnose(df).summary())
 
 
 if __name__ == "__main__":

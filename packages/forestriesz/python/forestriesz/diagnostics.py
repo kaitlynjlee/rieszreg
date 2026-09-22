@@ -53,17 +53,7 @@ def diagnose_forest(estimator, Z, **kwargs) -> ForestDiagnostics:
                 mean_leaf_size = sum(sample_counts) / float(total_leaves)
 
     return ForestDiagnostics(
-        n=base.n,
-        rms=base.rms,
-        mean=base.mean,
-        min=base.min,
-        max=base.max,
-        abs_quantiles=base.abs_quantiles,
-        n_extreme=base.n_extreme,
-        extreme_fraction=base.extreme_fraction,
-        extreme_threshold=base.extreme_threshold,
-        riesz_loss=base.riesz_loss,
-        warnings=base.warnings,
+        **vars(base),
         feature_importances=importances,
         mean_leaf_size=mean_leaf_size,
         n_leaves_mean=n_leaves_mean,

@@ -82,7 +82,7 @@ def test_random_splitter_grows_a_tree_on_signaled_dgp():
     # Random thresholds are sometimes unproductive; over depth=5 with 5
     # informative-ish features we should get at least 2 leaves with high
     # probability.
-    assert n_leaves(est.predictor_.tree) >= 2
+    assert est.get_n_leaves() >= 2
 
 
 def test_random_splitter_random_state_reproducibility():
@@ -107,8 +107,8 @@ def test_random_splitter_different_seeds_produce_different_trees():
     a_pred = a_est.predict(df)
     b_pred = b_est.predict(df)
     # Sanity: both fits grew non-trivially.
-    assert n_leaves(a_est.predictor_.tree) > 1
-    assert n_leaves(b_est.predictor_.tree) > 1
+    assert a_est.get_n_leaves() > 1
+    assert b_est.get_n_leaves() > 1
     # Different seeds → different threshold draws → different predictions.
     assert not np.array_equal(a_pred, b_pred)
 
@@ -141,5 +141,5 @@ def test_random_splitter_handles_constant_column_gracefully():
         estimand=ATE(treatment="a", covariates=("x0", "x1", "x2")),
         max_depth=4, splitter="random", random_state=0,
     ).fit(df)
-    assert n_leaves(est.predictor_.tree) >= 2  # other features still split
+    assert est.get_n_leaves() >= 2  # other features still split
     assert np.isfinite(est.predict(df)).all()

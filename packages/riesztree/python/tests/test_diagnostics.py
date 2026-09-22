@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from riesztree import ATE, RieszTreeRegressor, diagnose_tree
+from riesztree import ATE, RieszTreeRegressor
 
 
 def test_diagnose_tree_extras(linear_gaussian_ate, covariate_keys):
@@ -13,7 +13,7 @@ def test_diagnose_tree_extras(linear_gaussian_ate, covariate_keys):
         estimand=ATE(treatment="a", covariates=covariate_keys),
         max_depth=4,
     ).fit(df)
-    d = diagnose_tree(est, df)
+    d = est.diagnose(df)
     assert d.n == 800
     assert d.n_leaves >= 1
     assert d.max_depth_actual >= 0

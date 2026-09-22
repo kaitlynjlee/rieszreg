@@ -135,7 +135,7 @@ def main():
     alpha_hat = fit_alpha_oof(df)
 
     print("# Diagnostics on α̂ ...")
-    from rieszboost.diagnostics import diagnose
+    from rieszboost import diagnose
     print(diagnose(alpha_hat).summary())
 
     psi, se = eee_ate(df, mu_hat_full, mu_hat_oof, alpha_hat)

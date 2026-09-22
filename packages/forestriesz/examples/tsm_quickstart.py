@@ -12,11 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from forestriesz import (
-    ForestRieszRegressor,
-    TSM,
-    diagnose_forest,
-)
+from forestriesz import ForestRieszRegressor, TSM
 
 
 def main() -> None:
@@ -50,7 +46,7 @@ def main() -> None:
     width = float(np.mean(ub - lb))
     print(f"mean 90% CI width    : {width:.3f}")
     print()
-    print(diagnose_forest(fr, df).summary())
+    print(fr.diagnose(df).summary())
 
 
 if __name__ == "__main__":

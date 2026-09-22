@@ -26,9 +26,9 @@ from rieszboost import (
     SquaredLoss,
     TSM,
 )
-from rieszboost.estimand import estimand_from_spec
-from rieszboost.losses import loss_from_spec
-from rieszboost.tracer import trace
+from rieszreg.estimands import estimand_from_spec
+from rieszreg.losses import loss_from_spec
+from rieszreg.estimands.tracer import trace
 
 
 # ---------- Tracer / Estimand invariants ----------

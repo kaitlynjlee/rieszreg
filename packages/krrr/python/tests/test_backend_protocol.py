@@ -6,7 +6,8 @@ import numpy as np
 
 from rieszreg.backends.base import Backend, FitResult, Predictor
 
-from krrr import KernelRidgeBackend, KernelPredictor
+from krrr import KernelRidgeBackend
+from krrr.predictor import KernelPredictor
 
 
 def test_backend_has_fit_augmented():

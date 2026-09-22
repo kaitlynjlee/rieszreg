@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from riesztree import ATE, RieszTreeRegressor, diagnose_tree
+from riesztree import ATE, RieszTreeRegressor
 
 
 def main() -> None:
@@ -30,7 +30,7 @@ def main() -> None:
     print(f"correlation w/ truth : {np.corrcoef(alpha_hat, truth)[0, 1]:.3f}")
     print(f"RMSE vs truth        : {float(np.sqrt(np.mean((alpha_hat - truth) ** 2))):.3f}")
     print()
-    print(diagnose_tree(est, df).summary())
+    print(est.diagnose(df).summary())
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
 """rieszreg: shared abstractions for the Riesz-regression package family.
 
-Implementation packages (rieszboost, krrr, ...) depend on rieszreg for the
-estimand machinery, Bregman-Riesz losses, augmentation engine, Backend
-Protocol, base diagnostics, and the sklearn-compatible `RieszEstimator`
-orchestrator.
+Learner packages (rieszboost, krrr, forestriesz, riesztree, riesznet)
+depend on rieszreg for the estimands, Bregman-Riesz losses, augmentation
+engine, Backend Protocols, diagnostics, and the sklearn-compatible
+`RieszEstimator`. Most users import from a learner package, which
+re-exports the user-facing names listed in `rieszreg.user_api`:
 
-    from rieszreg import RieszEstimator, ATE, SquaredLoss
-    from rieszboost.backends import XGBoostBackend
-    est = RieszEstimator(estimand=ATE(), loss=SquaredLoss(), backend=XGBoostBackend())
-    est.fit(Z)
+    from rieszboost import RieszBooster, ATE
+    est = RieszBooster(estimand=ATE(treatment="treated"))
+    est.fit(Z)                   # Z: treatment column + covariates
+    alpha_hat = est.predict(Z)
 """
 
 # Mirror sklearn's `sklearn/__init__.py`: when xgboost (rieszboost) and torch
