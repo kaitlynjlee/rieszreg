@@ -8,6 +8,7 @@ Designed to compose with `sklearn.model_selection.GridSearchCV`,
 
 from __future__ import annotations
 
+import inspect
 from typing import Sequence
 
 import numpy as np
@@ -98,8 +99,32 @@ class RieszBooster(RieszEstimator):
         feats = _features_from_rows(rows, self.estimand)
         return self.predictor_.predict_alpha_path(feats, n_estimators_grid)
 
+    # Boosting-loop knobs that only take effect when RieszBooster itself
+    # builds the backend (backend=None). An explicit backend owns these
+    # itself, so setting them alongside one is a silent no-op -- see the
+    # guard in _resolved_backend.
+    _BOOSTING_LOOP_PARAMS = (
+        "n_estimators", "learning_rate", "early_stopping_rounds", "validation_fraction",
+    )
+
     def _resolved_backend(self) -> Backend:
         if self.backend is not None:
+            defaults = inspect.signature(RieszBooster.__init__).parameters
+            overridden = [
+                name for name in self._BOOSTING_LOOP_PARAMS
+                if getattr(self, name) != defaults[name].default
+            ]
+            if overridden:
+                raise ValueError(
+                    f"RieszBooster(backend={self.backend!r}) was given explicitly "
+                    f"along with non-default {overridden}, but these boosting-loop "
+                    "knobs are only applied when RieszBooster builds its own "
+                    "backend (backend=None) -- an explicit backend is used as-is, "
+                    "so they'd be silently ignored. Set them on the backend object "
+                    "itself instead, e.g. XGBoostBackend(n_estimators=..., "
+                    "learning_rate=..., early_stopping_rounds=..., "
+                    "validation_fraction=...)."
+                )
             return self.backend
         return XGBoostBackend(
             n_estimators=self.n_estimators,

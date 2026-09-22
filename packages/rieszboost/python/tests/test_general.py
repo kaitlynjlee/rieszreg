@@ -46,11 +46,13 @@ def test_sklearn_backend_with_kernel_ridge():
     df, pi = _df_pi(800, seed=1)
     booster = RieszBooster(
         estimand=rieszboost.ATE(),
-        backend=SklearnBackend(lambda: KernelRidge(alpha=1.0, kernel="rbf", gamma=2.0)),
-        n_estimators=80,
-        early_stopping_rounds=10,
-        validation_fraction=0.2,
-        learning_rate=0.05,
+        backend=SklearnBackend(
+            lambda: KernelRidge(alpha=1.0, kernel="rbf", gamma=2.0),
+            n_estimators=80,
+            learning_rate=0.05,
+            early_stopping_rounds=10,
+            validation_fraction=0.2,
+        ),
     ).fit(df)
     a = df["a"].values
     alpha_true = a / pi - (1 - a) / (1 - pi)
@@ -63,11 +65,13 @@ def test_sklearn_backend_score_matches_negative_loss():
     df, _ = _df_pi(800, seed=2)
     booster = RieszBooster(
         estimand=rieszboost.ATE(),
-        backend=SklearnBackend(lambda: DecisionTreeRegressor(max_depth=3, random_state=0)),
-        n_estimators=200,
-        early_stopping_rounds=15,
-        validation_fraction=0.2,
-        learning_rate=0.05,
+        backend=SklearnBackend(
+            lambda: DecisionTreeRegressor(max_depth=3, random_state=0),
+            n_estimators=200,
+            learning_rate=0.05,
+            early_stopping_rounds=15,
+            validation_fraction=0.2,
+        ),
     ).fit(df)
     assert booster.score(df) == pytest.approx(-booster.riesz_loss(df), rel=1e-9)
 
@@ -75,15 +79,16 @@ def test_sklearn_backend_score_matches_negative_loss():
 def test_sklearn_backend_requires_validation_for_early_stopping():
     from sklearn.tree import DecisionTreeRegressor
     df, _ = _df_pi(50, seed=0)
-    # validation_fraction=0 + early_stopping_rounds=N => booster's fit does
-    # the internal split (using default 0.2 fraction). But when we pass
-    # the backend directly to fit_augmented with no valid set, it raises.
-    # End-to-end via RieszBooster: should auto-split.
+    # validation_fraction>0 + early_stopping_rounds=N: RieszEstimator.fit()
+    # auto-splits off a validation slice before augmentation, so no
+    # eval_set is needed here for early stopping to kick in.
     booster = RieszBooster(
         estimand=rieszboost.ATE(),
-        backend=SklearnBackend(lambda: DecisionTreeRegressor(max_depth=3)),
-        n_estimators=10,
-        early_stopping_rounds=2,
+        backend=SklearnBackend(
+            lambda: DecisionTreeRegressor(max_depth=3),
+            n_estimators=10,
+            early_stopping_rounds=2,
+            validation_fraction=0.2,
+        ),
     ).fit(df)
-    # Auto-split kicks in via validation_fraction default of 0.2 when ES set.
     assert booster.best_iteration_ is not None or len(booster.predictor_.learners) > 0

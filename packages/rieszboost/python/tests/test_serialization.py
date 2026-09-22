@@ -92,8 +92,10 @@ def test_round_trip_with_sklearn_backend(tmp_path):
     df = _df(seed=4)
     b = RieszBooster(
         estimand=rieszboost.ATE(),
-        backend=SklearnBackend(lambda: DecisionTreeRegressor(max_depth=3, random_state=0)),
-        n_estimators=20, learning_rate=0.05,
+        backend=SklearnBackend(
+            lambda: DecisionTreeRegressor(max_depth=3, random_state=0),
+            n_estimators=20, learning_rate=0.05,
+        ),
     ).fit(df)
     pre = b.predict(df)
     b.save(tmp_path / "sk")

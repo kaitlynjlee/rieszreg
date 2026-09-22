@@ -57,7 +57,7 @@ def _ate_lee_reference(
     X = x.reshape(-1, 1)
     n = len(A)
 
-    data = np.row_stack((
+    data = np.vstack((
         np.column_stack((A, X)),
         np.column_stack((np.zeros(n)[A[:, 0] == 1], X[A[:, 0] == 1, :])),
         np.column_stack((np.ones(n)[A[:, 0] == 0], X[A[:, 0] == 0, :])),
@@ -95,7 +95,7 @@ def _att_lee_reference(
     X = x.reshape(-1, 1)
     n = len(A)
 
-    data = np.row_stack((
+    data = np.vstack((
         np.column_stack((A.reshape(-1, 1), X)),
         np.column_stack((np.zeros(n)[A == 1].reshape(-1, 1), X[A == 1, :])),
     ))
@@ -154,9 +154,9 @@ def test_rieszboost_matches_lee_schuler(
 
     booster = RieszBooster(
         estimand=factory(treatment="a", covariates=("x",)),
-        backend=XGBoostBackend(gradient_only=True),
-        learning_rate=lr_ref / 2.0,
-        n_estimators=n_estimators,
+        backend=XGBoostBackend(
+            gradient_only=True, learning_rate=lr_ref / 2.0, n_estimators=n_estimators,
+        ),
         max_depth=max_depth,
         reg_lambda=0.0,
         random_state=0,
