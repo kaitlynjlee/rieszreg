@@ -53,6 +53,10 @@ class FiniteEvalEstimand(Estimand):
     """
 
     name: str = "custom"
+    # True when α₀ takes negative values whatever the data, because the
+    # functional subtracts (ATE, ATT, the shifts). Loss.check_estimand raises
+    # on these under a loss that keeps α ≥ 0 and only warns for the rest.
+    _alpha_takes_negative_values = False
 
     def __init__(
         self,
@@ -67,6 +71,10 @@ class FiniteEvalEstimand(Estimand):
         if name is not None:
             self.name = name
         self.factory_spec = factory_spec
+
+    def check_support(self, features: np.ndarray) -> None:
+        """Raise if α is not identified from these training rows (e.g. ATE
+        with no control rows). Built-ins override; custom estimands pass."""
 
     def bind(self, columns) -> "FiniteEvalEstimand":
         """Return the estimand with its input columns resolved against the
@@ -239,6 +247,14 @@ class _BuiltinEstimand(FiniteEvalEstimand):
             )
         return a == 1.0
 
+    def _check_both_arms(self, features: np.ndarray) -> None:
+        treated = self._binary_treatment(features[:, 0])
+        if treated.all() or not treated.any():
+            raise ValueError(
+                f"{self.name} compares treated and control rows, but every row "
+                f"has {self.treatment} = {int(treated[0])}."
+            )
+
     def bind(self, columns) -> "_BuiltinEstimand":
         if self.covariates is not None:
             return self
@@ -272,6 +288,8 @@ class ATE(_BuiltinEstimand):
         treatment and the remaining columns are the covariates.
     """
 
+    _alpha_takes_negative_values = True
+
     def __init__(self, treatment: str = "a", covariates: Sequence[str] | None = None):
         super().__init__(treatment, covariates)
 
@@ -280,6 +298,8 @@ class ATE(_BuiltinEstimand):
             x = self._covariate_values(z)
             return alpha(**{self.treatment: 1, **x}) - alpha(**{self.treatment: 0, **x})
         return inner
+
+    check_support = _BuiltinEstimand._check_both_arms
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
@@ -304,6 +324,8 @@ class ATT(_BuiltinEstimand):
     ``treatment`` and ``covariates`` work as in :class:`ATE`.
     """
 
+    _alpha_takes_negative_values = True
+
     def __init__(self, treatment: str = "a", covariates: Sequence[str] | None = None):
         super().__init__(treatment, covariates)
 
@@ -314,6 +336,8 @@ class ATT(_BuiltinEstimand):
                 alpha(**{self.treatment: 1, **x}) - alpha(**{self.treatment: 0, **x})
             )
         return inner
+
+    check_support = _BuiltinEstimand._check_both_arms
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
@@ -361,6 +385,13 @@ class TSM(_BuiltinEstimand):
             return alpha(**{self.treatment: self.level, **self._covariate_values(z)})
         return inner
 
+    def check_support(self, features):
+        if not (features[:, 0] == self.level).any():
+            raise ValueError(
+                f"No row has {self.treatment} = {self.level}, so the mean outcome "
+                "at that treatment level can't be estimated from this data."
+            )
+
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
         a_idx = 0  # treatment is always column 0 of feature_keys
@@ -398,6 +429,8 @@ class AdditiveShift(_BuiltinEstimand):
     ``treatment`` and ``covariates`` work as in :class:`ATE`.
     """
 
+    _alpha_takes_negative_values = True
+
     def __init__(self, delta: float, treatment: str = "a", covariates: Sequence[str] | None = None):
         if delta == 0:
             raise ValueError("AdditiveShift requires delta != 0 (delta=0 is a degenerate, vacuous estimand).")
@@ -430,6 +463,8 @@ class LocalShift(_BuiltinEstimand):
     Full LASE divides by P(A < threshold) and is not a Riesz functional.
     ``treatment`` and ``covariates`` work as in :class:`ATE`.
     """
+
+    _alpha_takes_negative_values = True
 
     def __init__(
         self,

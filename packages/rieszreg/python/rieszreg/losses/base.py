@@ -48,6 +48,8 @@ User-facing patterns:
 
 from __future__ import annotations
 
+import warnings
+
 from typing import Callable, Literal
 
 import numpy as np
@@ -75,7 +77,7 @@ _LINKS: dict[
     ),
 }
 
-# α-domain per link, used only by `Loss.best_constant_init` defaults.
+# α-domain per link, for inline losses' `Loss.alpha_domain`.
 _LINK_DOMAIN: dict[str, tuple[float, float]] = {
     "identity": (-np.inf, np.inf),
     "exp": (0.0, np.inf),
@@ -286,15 +288,47 @@ class Loss:
         `m̄` into the loss's α-domain when its codomain is restricted (KL: α > 0;
         Bernoulli: α ∈ (0, 1); BoundedSquared: α ∈ (lo, hi)).
         """
-        # Default: project into the inline link's α-domain if known.
+        lo, hi = self.alpha_domain
+        if lo == -np.inf and hi == np.inf:
+            return float(m_bar)
+        return float(np.clip(m_bar, lo + 1e-9, hi - 1e-9))
+
+    @property
+    def alpha_domain(self) -> tuple[float, float]:
+        """The open range ``(lo, hi)`` of α values the link can produce."""
         for link_str, (fwd, _) in _LINKS.items():
             if getattr(self, "_link_fwd_inline", None) is fwd:
-                lo, hi = _LINK_DOMAIN[link_str]
-                if lo == -np.inf and hi == np.inf:
-                    return float(m_bar)
-                eps = 1e-9
-                return float(np.clip(m_bar, lo + eps, hi - eps))
-        return float(m_bar)
+                return _LINK_DOMAIN[link_str]
+        return (-np.inf, np.inf)
+
+    def check_estimand(self, aug, estimand) -> None:
+        """Raise if the estimand's α can't lie in this loss's α-range, which
+        would otherwise give a fit stuck at the edge of the range. Warn when
+        that depends on the data and the data suggest it."""
+        lo, hi = self.alpha_domain
+        loss, name = type(self).__name__, estimand.name
+        negative = getattr(estimand, "_alpha_takes_negative_values", False)
+        if lo >= 0 and negative:
+            raise ValueError(
+                f"{loss} keeps α above {lo:g}, but {name}'s α takes negative "
+                "values (its functional subtracts, e.g. α(0, x) in ATE). "
+                "Use SquaredLoss."
+            )
+        if lo >= 0 and not negative and (aug.potential_deriv_coef > 0).any():
+            warnings.warn(
+                f"{loss} keeps α above {lo:g}, but some rows enter {name}'s "
+                "functional with a negative coefficient (for OutcomeRegNormSq, "
+                "rows with y < 0), so α may be negative somewhere. Where it is, "
+                f"the fit can only reach {lo:g}; SquaredLoss has no such limit.",
+                UserWarning,
+                stacklevel=3,
+            )
+        if not lo < aug.m_bar < hi:
+            raise ValueError(
+                f"{loss} keeps α in ({lo:g}, {hi:g}), but the mean of "
+                f"{name}'s α is {aug.m_bar:.3g}, outside that range. "
+                "Use SquaredLoss."
+            )
 
     # ---- Round-trip ----
 
