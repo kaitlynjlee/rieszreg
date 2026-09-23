@@ -33,7 +33,7 @@ Three tiers determine where an abstraction lives. Misclassifying an abstraction 
 
 **Tier 1 — universal.** Applies to *every* learner. Lives at the top of `rieszreg`'s public API: `Estimand`, `Loss`, `Diagnostics`, the `Backend` / `MomentBackend` Protocols, `RieszEstimator` orchestrator, the predictor-loader registry, `RieszEstimatorR6` base R6 class. Tier-1 objects accept only args that every plausible backend can use meaningfully.
 
-**Tier 2 — shared utility.** Used by *multiple* learners but not all. `Estimand.augment(features)` / `AugmentedDataset` (consumed by augmentation-style backends), `trace(estimand, row)` helper (consumed by moment-style backends), the `rieszreg.testing.dgps` canonical DGPs (used by every package's consistency suite, but optional). Lives in `rieszreg`, but tier-1 objects invoke them as opt-in services — never bake them in. Tier-1 dispatch may select between tier-2 utilities based on backend type; tier-2 must not appear in any tier-1 object's constructor signature or method-kwarg list.
+**Tier 2 — shared utility.** Used by *multiple* learners but not all. `Estimand.augment(features)` / `AugmentedDataset` (consumed by both backend styles; moment-style backends group it by original row), `trace(estimand, row)` helper (the symbolic path behind custom estimands' `augment`), the `rieszreg.testing.dgps` canonical DGPs (used by every package's consistency suite, but optional). Lives in `rieszreg`, but tier-1 objects invoke them as opt-in services — never bake them in. Tier-1 dispatch may select between tier-2 utilities based on backend type; tier-2 must not appear in any tier-1 object's constructor signature or method-kwarg list.
 
 **Tier 3 — learner-specific.** `n_estimators`, `learning_rate`, `epochs`, `batch_size`, `early_stopping_rounds`, `kernel`, `lambda_grid`, `riesz_feature_fns`, `hessian_floor`, `solver`, `n_landmarks`, etc. Lives in implementation packages, on the concrete backend dataclass.
 
@@ -75,7 +75,7 @@ The orchestrator's `fit` chooses between two tier-2 services based on which Prot
 # tier-1 dispatch logic inside RieszEstimator.fit
 if hasattr(backend, "fit_rows") and not hasattr(backend, "fit_augmented"):
     result = backend.fit_rows(
-        rows_train, rows_valid, self.estimand, loss,
+        feats_train, feats_valid, estimand, loss,
         ys_train=ys_train, ys_valid=ys_valid, **common_kwargs,
     )
 else:
@@ -232,7 +232,7 @@ This is the contract every implementation package must meet. Section structure f
 ### 2.1 Backend Protocol
 - **[your package]** Implement *at least one* of two Protocols from `rieszreg.backends.base`. Both return `FitResult(predictor, best_iteration, best_score, history)`. Pick whichever fits your learner's natural loss decomposition:
   - `Backend.fit_augmented(aug_train, aug_valid, loss, ...)` — for learners whose loss decomposes naturally over the augmented `(a, b)` evaluation points (kernel ridge, gradient boosting). Implementations: `KernelRidgeBackend` (krrr), `XGBoostBackend` / `SklearnBackend` (rieszboost).
-  - `MomentBackend.fit_rows(rows_train, rows_valid, estimand, loss, *, ys_train=None, ys_valid=None, ...)` — for learners whose loss decomposes per original sample row (random forests, neural nets). Such backends compute per-row moments via `rieszreg.trace(estimand, row, y)` directly, avoiding the augmentation blow-up. The `estimand` argument is a `FiniteEvalEstimand`. `ys_train` / `ys_valid` carry the per-row outcome (sklearn-style) for estimands whose `m` reads it; they are `None` otherwise. Implementations: `ForestRieszBackend` (forestriesz).
+  - `MomentBackend.fit_rows(X_train, X_valid, estimand, loss, *, ys_train=None, ys_valid=None, ...)` — for learners whose loss decomposes per original sample row (random forests, neural nets). `X_train` / `X_valid` are float arrays with columns in `estimand.feature_keys` order. Such backends read per-row moments off `estimand.augment(X, ys)` grouped by `origin_index` (vectorised for built-ins, traced for custom estimands). The `estimand` argument is a `FiniteEvalEstimand`. `ys_train` / `ys_valid` carry the per-row outcome (sklearn-style) for estimands whose `m` reads it; they are `None` otherwise. Implementations: `ForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
 - **[design rule]** The orchestrator dispatches at fit time: if the backend exposes `fit_rows` and not `fit_augmented`, the moment path is used; otherwise the augmented path. Backends implementing both default to `fit_augmented` for back-compat.
 - **[your package]** Return a `Predictor` with `predict_eta()` and `predict_alpha()` (link applied). Inherit base interface from rieszreg; storage format is your choice.
 - **[your package]** `FitResult` shape must match the protocol so `RieszEstimator` can orchestrate uniformly.
@@ -276,12 +276,12 @@ This is the contract every implementation package must meet. Section structure f
 - **[design rule: sklearn-first, every feature]** Before writing any procedural code with loops, splits, grids, or folds, ask *"is there an sklearn way?"*. If yes, use it (`cross_val_predict`, `cross_validate`, `KFold`, `train_test_split`, `StratifiedKFold`, `GridSearchCV`, `HalvingGridSearchCV`, `RandomizedSearchCV`, `Pipeline`, `ColumnTransformer`, `FunctionTransformer`, `make_scorer`, `n_jobs=`). Hand-rolled fold loops are a code smell. Bespoke is reserved for things sklearn genuinely doesn't cover (the `LinearForm` tracer, the custom xgboost objective, the Bregman `Loss`).
 
 ### 3.3 Module separation of concerns
-- **[design rule]** Keep the seam structure that already works: `estimands/` (schema + functional), `losses/` (Bregman link/grad/Hessian), `tracer.py` + `augmentation.py` (symbolic linear-form algebra and dataset assembly — used by augmentation-style backends; moment-style backends call `trace` directly), `backends/` (algorithm-specific `fit_augmented` *or* `fit_rows`), `estimator.py` (sklearn wrapper that orchestrates and dispatches between the two backend paths), `diagnostics.py` (health checks), `serialization.py` (save/load + factory_spec), `testing/` (DGPs and conformance helpers).
+- **[design rule]** Keep the seam structure that already works: `estimands/` (schema + functional), `losses/` (Bregman link/grad/Hessian), `tracer.py` + `augmentation.py` (symbolic linear-form algebra and dataset assembly — used by both backend styles; moment-style backends group the augmented rows by `origin_index`), `backends/` (algorithm-specific `fit_augmented` *or* `fit_rows`), `estimator.py` (sklearn wrapper that orchestrates and dispatches between the two backend paths), `diagnostics.py` (health checks), `serialization.py` (save/load + factory_spec), `testing/` (DGPs and conformance helpers).
 - **[your package]** Most of these come from `rieszreg`; in your package, `backends/` is what you actually own. Backend-specific code lives in `backends/<backend>.py`.
 
 ### 3.4 Public API surface (entry points in `__init__.py`)
 - **[your package]** Re-export the rieszreg primitives a typical user needs (estimand factories, loss factories, top-level estimator class, `diagnose`, `LinearForm`, `Tracer`) plus your own backend factories and convenience class. Pattern: [__init__.py:14-49](rieszboost/python/rieszboost/__init__.py:14).
-- **[design rule]** The re-export list is invariant across the two backend Protocols: even moment-style packages re-export `LinearForm` and `Tracer` so users can author custom `m()`s the same way (the backend just consumes them through `trace(estimand, row)` instead of `Estimand.augment`). Backend choice is an internal implementation detail; the user-facing surface is one `RieszEstimator` subclass with `fit / predict / score / diagnose`.
+- **[design rule]** The re-export list is invariant across the two backend Protocols: even moment-style packages re-export `LinearForm` and `Tracer` so users can author custom `m()`s the same way (the backend just consumes them through `Estimand.augment` grouped by original row). Backend choice is an internal implementation detail; the user-facing surface is one `RieszEstimator` subclass with `fit / predict / score / diagnose`.
 - **[design rule]** Lazy `__getattr__` for any symbol that pulls in optional heavy deps.
 
 ### 3.5 Serialization & persistence

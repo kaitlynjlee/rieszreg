@@ -37,7 +37,7 @@ Both Protocols live in `packages/rieszreg/python/rieszreg/backends/base.py`. Bot
 
 - **`Backend.fit_augmented(aug_train, aug_valid, loss, ...)`** — for learners whose loss decomposes naturally over the augmented `(a, b)` evaluation points. Use for kernel ridge, gradient boosting, anything that wants the augmented dataset pre-computed for it. Reference impls: `KernelRidgeBackend` (krrr), `XGBoostBackend` / `SklearnBackend` (rieszboost).
 
-- **`MomentBackend.fit_rows(rows_train, rows_valid, estimand, loss, *, ys_train=None, ys_valid=None, ...)`** — for learners whose loss decomposes per original sample row. Compute per-row moments via `rieszreg.trace(estimand, row, y)` directly, avoiding the augmentation blow-up. Use for random forests, neural nets. Reference impls: `ForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
+- **`MomentBackend.fit_rows(X_train, X_valid, estimand, loss, *, ys_train=None, ys_valid=None, ...)`** — for learners whose loss decomposes per original sample row. `X_*` are float arrays in `estimand.feature_keys` order. Read per-row moments off `estimand.augment(X, ys)` grouped by `origin_index` (vectorised for built-ins); never loop `trace` over rows. Use for random forests, neural nets. Reference impls: `ForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
 
 The orchestrator dispatches at fit time based on which Protocol the backend exposes. Backends implementing both default to `fit_augmented` for back-compat.
 

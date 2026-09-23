@@ -1,7 +1,8 @@
 """Backend protocol: the swappable component that consumes the per-row data
 and a Loss and produces a fitted Predictor.
 
-Two entry points are supported. A backend implements at most one:
+Two entry points are supported. A backend implements one; if it has both,
+the orchestrator calls ``fit_augmented``:
 
   * ``fit_augmented`` — for learners whose loss decomposes naturally over
     augmented evaluation points (kernel ridge, gradient boosting). Receives an
@@ -9,12 +10,14 @@ Two entry points are supported. A backend implements at most one:
     Implementations: ``KernelRidgeBackend`` (krrr), ``XGBoostBackend`` /
     ``SklearnBackend`` (rieszboost).
   * ``fit_rows`` — for learners whose loss decomposes per original sample row
-    (random forests, neural nets). Receives raw ``rows`` plus the ``Estimand``
-    so the backend can compute per-row moments via ``rieszreg.trace`` directly.
-    Implementations: ``ForestRieszBackend`` (forestriesz).
+    (random forests, neural nets). Receives the original-row feature matrix
+    plus the ``Estimand``; per-row moments come from ``estimand.augment``
+    grouped by ``origin_index``. Implementations: ``ForestRieszBackend``
+    (forestriesz), ``TorchBackend`` (riesznet).
 
-The ``RieszEstimator`` orchestrator dispatches by looking for ``fit_rows``
-first; if absent, it builds the augmented dataset and calls ``fit_augmented``.
+The ``RieszEstimator`` orchestrator calls ``fit_rows`` when a backend defines
+only that method; otherwise it builds the augmented dataset and calls
+``fit_augmented``.
 
 Concrete backends live in implementation packages (rieszboost, krrr,
 forestriesz, ...).
@@ -71,7 +74,7 @@ class Backend(Protocol):
 
     Implementers consume a precomputed ``AugmentedDataset`` of (a, b)
     coefficients at evaluation points. The orchestrator builds the augmented
-    dataset by tracing the estimand on each input row before calling.
+    dataset with ``estimand.augment`` before calling.
 
     Method kwargs are universal: data, ``base_score``, ``random_state``,
     and ``hyperparams`` (a dict for backend-specific passthrough). All
@@ -96,13 +99,16 @@ class Backend(Protocol):
 class MomentBackend(Protocol):
     """Moment-style backend Protocol.
 
-    Alternative to ``Backend`` for learners that consume raw rows + the
-    estimand directly. Useful for random forests and neural nets where each
+    Alternative to ``Backend`` for learners that consume the original rows +
+    the estimand directly. Useful for random forests and neural nets where each
     sample row contributes an independent loss term — these learners benefit
     from per-row moment evaluation rather than the augmented (a, b) view.
 
     Same calling convention as ``Backend.fit_augmented``: data, ``base_score``,
-    ``random_state``, and ``hyperparams``. ``ys_train`` / ``ys_valid`` carry
+    ``random_state``, and ``hyperparams``. ``X_train`` / ``X_valid`` are
+    ``(n, len(estimand.feature_keys))`` float arrays with columns in
+    ``feature_keys`` order (``X_valid`` is ``None`` without a validation
+    set). ``ys_train`` / ``ys_valid`` carry
     the per-row outcome (sklearn-style) for estimands whose ``m`` reads it;
     they are ``None`` otherwise. Learner-specific knobs live on the concrete
     backend.
@@ -110,16 +116,16 @@ class MomentBackend(Protocol):
 
     def fit_rows(
         self,
-        rows_train: list[dict[str, Any]],
-        rows_valid: list[dict[str, Any]] | None,
+        X_train: np.ndarray,
+        X_valid: np.ndarray | None,
         estimand: "Estimand",
         loss: Loss,
         *,
         base_score: float,
         random_state: int,
         hyperparams: dict[str, Any],
-        ys_train: list | None = None,
-        ys_valid: list | None = None,
+        ys_train: np.ndarray | None = None,
+        ys_valid: np.ndarray | None = None,
     ) -> FitResult:
         ...
 

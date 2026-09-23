@@ -21,8 +21,8 @@ Every abstraction in this family is one of three tiers. Get this wrong and `Ries
 
 **Tier 2 — shared utility.** Used by *multiple* learners but not all. Lives in `rieszreg`, but tier-1 objects invoke them as opt-in services — never bake them in. Tier-1 dispatch may select between tier-2 utilities based on backend type; tier-2 must not appear in any tier-1 object's constructor signature or method-kwarg list.
 
-- `Estimand.augment(features)` / `AugmentedDataset` (consumed by augmentation-style backends)
-- `trace(estimand, row)` helper (consumed by moment-style backends)
+- `Estimand.augment(features)` / `AugmentedDataset` (consumed by both backend styles; moment-style backends group it by original row)
+- `trace(estimand, row)` helper (the symbolic path behind custom estimands' default `augment`)
 - `rieszreg.testing.dgps` canonical DGPs
 
 **Tier 3 — learner-specific.** Lives on the concrete backend dataclass in the implementation package. Examples: `n_estimators`, `learning_rate`, `epochs`, `batch_size`, `early_stopping_rounds`, `kernel`, `lambda_grid`, `riesz_feature_fns`, `hessian_floor`, `solver`, `n_landmarks`.
@@ -70,7 +70,7 @@ The orchestrator dispatches at fit time based on which Protocol the backend impl
 ```python
 # inside RieszEstimator.fit
 if hasattr(backend, "fit_rows") and not hasattr(backend, "fit_augmented"):
-    result = backend.fit_rows(rows_train, rows_valid, self.estimand, loss, ...)
+    result = backend.fit_rows(feats_train, feats_valid, estimand, loss, ...)
 else:
     aug_train = self.estimand.augment(feats_train, ys=ys_train)        # tier-2 service
     aug_valid = self.estimand.augment(feats_valid, ys=ys_valid) if feats_valid is not None else None
@@ -78,7 +78,7 @@ else:
 ```
 
 - **Augmentation-style** (`Backend.fit_augmented`) — for learners whose loss decomposes naturally over the augmented `(a, b)` evaluation points. Examples: `KernelRidgeBackend` (krrr), `XGBoostBackend` / `SklearnBackend` (rieszboost).
-- **Moment-style** (`MomentBackend.fit_rows`) — for learners whose loss decomposes per original sample row. Backend computes per-row moments via `rieszreg.trace(estimand, row, y)` directly, avoiding the augmentation blow-up. Examples: `ForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
+- **Moment-style** (`MomentBackend.fit_rows`) — for learners whose loss decomposes per original sample row. Receives the original-row feature arrays plus the estimand, and reads per-row moments off `estimand.augment(X, ys)` grouped by `origin_index`. Examples: `ForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
 
 Backends implementing both default to `fit_augmented` for back-compat.
 
@@ -152,6 +152,6 @@ In an impl package, `backends/` is what you actually own. Backend-specific code 
 
 ## 11. Data flow
 
-Construct estimand + loss + backend → `RieszEstimator` (or a convenience subclass) → `.fit(Z)` calls `estimand.augment(features)` (built-in subclasses emit augmented `(a, b)` rows in vectorised numpy; custom estimands trace `m` row-wise via a `LinearForm` and emit the same shape), or `.fit(Z)` calls `backend.fit_rows(...)` directly for moment-style backends → backend consumes → predictor returned → `.predict(Z)` applies link → α̂.
+Construct estimand + loss + backend → `RieszEstimator` (or a convenience subclass) → `.fit(Z)` calls `estimand.augment(features)` (built-in subclasses emit augmented `(a, b)` rows in vectorised numpy; custom estimands trace `m` row-wise via a `LinearForm` and emit the same shape), or `.fit(Z)` calls `backend.fit_rows(X, ...)` with the feature arrays for moment-style backends → backend consumes → predictor returned → `.predict(Z)` applies link → α̂.
 
 `m()` is JAX-style opaque. The tracer enforces linearity; any non-linear op raises. Fast path = augmentation + closed-form-friendly fitting. The slow general path (Friedman gradient boosting against arbitrary base learners for non-finite-point `m`) is on the roadmap; do not block on it.
