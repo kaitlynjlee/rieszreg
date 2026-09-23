@@ -81,6 +81,28 @@ def _ys_from_y(y, n: int) -> np.ndarray | None:
     return y_arr
 
 
+def _check_outcome_not_covariate(estimand, feats: np.ndarray, ys) -> None:
+    """With ``covariates=None`` every non-treatment column is a covariate,
+    including an outcome column left in Z, which biases α̂."""
+    for j, key in enumerate(estimand.feature_keys):
+        if key == getattr(estimand, "treatment", None):
+            continue
+        if ys is not None and np.array_equal(feats[:, j], ys):
+            raise ValueError(
+                f"Column {key!r} is the outcome y, but {estimand.name} is using it "
+                "as a covariate (covariates=None uses every non-treatment column). "
+                f"Drop it from Z or pass covariates=[...] to {estimand.name}."
+            )
+        if key.lower() in ("y", "outcome"):
+            warnings.warn(
+                f"{estimand.name} is using column {key!r} as a covariate "
+                "(covariates=None uses every non-treatment column). If it is the "
+                f"outcome, drop it from Z or pass covariates=[...] to {estimand.name}.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+
 def _split_Z(Z, y, validation_fraction: float, random_state):
     """Split (Z, y) into train/valid by `validation_fraction`. `y=None` is
     threaded through unchanged. Returns `(Z_train, Z_valid, y_train, y_valid)`."""
@@ -264,14 +286,17 @@ class RieszEstimator(BaseEstimator):
             ys_valid = _ys_from_y(y_valid, feats_valid.shape[0])
         else:
             feats_valid = ys_valid = None
+        if getattr(self.estimand, "covariates", ()) is None:
+            _check_outcome_not_covariate(estimand, feats_train, ys_train)
+        estimand.check_support(feats_train)
         aug_train = estimand.augment(feats_train, ys=ys_train)
+        loss.check_estimand(aug_train, estimand.name)
 
         # init=None: the constant minimizing the empirical Riesz loss. For any
         # Bregman loss with strictly convex h that is m̄ = E[m(Z, 1)], and
         # Σ_r C_r = −Σ_i m(Z_i, 1), so m̄ falls out of the augmentation.
         if self.init is None:
-            m_bar = -float(aug_train.potential_deriv_coef.sum()) / aug_train.n_rows
-            init_alpha = loss.best_constant_init(m_bar)
+            init_alpha = loss.best_constant_init(aug_train.m_bar)
         elif isinstance(self.init, Real):
             init_alpha = float(self.init)
         else:

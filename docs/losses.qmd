@@ -31,6 +31,15 @@ The "Potential $h$" column is $h$ in α-space — the function the user passes a
 | `BernoulliLoss` | $\alpha \log \alpha + (1-\alpha)\log(1-\alpha)$ | $\eta\,\sigma(\eta) - \log(1+e^\eta)$ | $(0, 1)$ | $\alpha_0$ known to lie in $(0, 1)$. |
 | `BoundedSquaredLoss(lo, hi)` | $\alpha^2$ | $\big(\mathrm{lo}+(\mathrm{hi}-\mathrm{lo})\sigma(\eta)\big)^2$ | $(\mathrm{lo}, \mathrm{hi})$ | Squared-loss fit with prior bounds (e.g. trimmed-propensity ratios). |
 
+The loss must be able to represent the true α. `fit` raises when it can't tell that it does:
+
+- **α takes negative values but the loss keeps α ≥ 0.** This covers `KLLoss` and `BernoulliLoss` with `ATE`, `ATT`, `AdditiveShift` and `LocalShift`. It also covers `BoundedSquaredLoss` with `lo ≥ 0` on those estimands.
+- **The mean of α is outside the loss's range.** The mean is $E[m(Z, 1)]$, which is 1 for `TSM`, so `BernoulliLoss` can't fit `TSM`.
+
+No built-in estimand has α in $(0, 1)$, so `BernoulliLoss` is for custom estimands only.
+
+`KLLoss` needs good overlap. Where some covariate values have almost no treated rows, the empirical KL loss has no lower bound there. A flexible learner (`SklearnBackend`, `RieszNet`) can then push α̂ toward infinity at those points. Use `SquaredLoss`, or `RieszBooster`'s default XGBoost backend, when propensities get close to 0 or 1.
+
 Pass the loss instance to any learner via `loss=`:
 
 ::: {.panel-tabset group="lang"}
