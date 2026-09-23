@@ -1,7 +1,7 @@
 """ForestRieszBackend — implements `rieszreg.MomentBackend`.
 
 Consumes the original-row feature matrix + the estimand (the moment-style
-entry point), computes per-row moments from ``estimand.augment``, packs them
+entry point), computes per-row moments from the augmented data, packs them
 as a linear-moment problem for EconML's ``BaseGRF``, and returns a
 ``FitResult`` whose predictor is a ``ForestPredictor``.
 """
@@ -9,7 +9,7 @@ as a linear-moment problem for EconML's ``BaseGRF``, and returns a
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -45,7 +45,7 @@ class ForestRieszBackend:
 
     Wraps EconML's ``BaseGRF`` with the linear-moment criterion. Implements
     ``MomentBackend.fit_rows``: the forest is grown on the n original rows,
-    with per-row moments computed from ``estimand.augment``.
+    with per-row moments computed from the augmented data.
 
     Parameters
     ----------
@@ -102,11 +102,10 @@ class ForestRieszBackend:
         estimand: Estimand,
         loss: Loss,
         *,
+        aug_train: AugmentedDataset,
+        aug_valid: AugmentedDataset | None,
         base_score: float,
         random_state: int,
-        hyperparams: dict[str, Any],
-        ys_train: np.ndarray | None = None,
-        ys_valid: np.ndarray | None = None,
     ) -> FitResult:
         if not isinstance(loss, SquaredLoss):
             raise NotImplementedError(
@@ -119,7 +118,7 @@ class ForestRieszBackend:
                 "different per-leaf gradients than the loss API exposes; "
                 "planned for v3."
             )
-        del hyperparams, base_score  # each leaf solves for α directly
+        del base_score  # each leaf solves for α directly
 
         # Sieve: "auto" => default_riesz_features(estimand) when one exists;
         # None (or no default) => constant basis.
@@ -134,7 +133,7 @@ class ForestRieszBackend:
 
         # Per-row basis values φ(W_i) and moments A[i, j] = m(W_i; φ_j).
         phi_W = _eval_phi(X_train, phi_fns)
-        A = _per_row_moments(estimand.augment(X_train, ys=ys_train), phi_fns)
+        A = _per_row_moments(aug_train, phi_fns)
 
         # Pack T = [vec(J) | A] per row, with J = φφ' (symmetric, so flat
         # order is immaterial). y is a dummy scalar zero column — EconML's
@@ -199,12 +198,11 @@ class ForestRieszBackend:
             loss=loss,
             # Always store the resolved sieve, never the "auto" sentinel.
             riesz_feature_fns=sieve if sieve else None,
-            feature_keys=tuple(estimand.feature_keys),
             split_feature_indices=split_idx,
         )
 
-        val_score = None
-        if X_valid is not None:
-            aug_valid = estimand.augment(X_valid, ys=ys_valid)
-            val_score = aug_valid.mean_loss(loss, predictor.predict_alpha(aug_valid.features))
+        val_score = (
+            aug_valid.mean_loss(loss, predictor.predict_alpha(aug_valid.features))
+            if aug_valid is not None else None
+        )
         return FitResult(predictor=predictor, best_score=val_score)

@@ -9,7 +9,7 @@ This package depends on `rieszreg` for the shared abstractions (`Estimand`, `Los
 
 - `AugForestRieszBackend` — `Backend.fit_augmented` Protocol implementation. Ensemble of `riesztree.RieszTreeBackend` instances over block-bootstrapped augmented rows; each tree fits a loss-aware splitter directly on the augmented dataset. Works on every estimand without per-estimand configuration. Supports all four built-in Bregman losses. With `splitter='hist'` the bin mapper is fitted once on the full augmented data and each tree calls `RieszTreeBackend._fit_binned` on its bootstrap rows of the shared binned matrix. `max_leaf_nodes` switches trees to best-first (leafwise) growth, as in sklearn.
 - `AugForestRieszRegressor` — convenience subclass of `rieszreg.RieszEstimator` with sklearn `RandomForestRegressor`-style hyperparameters (`n_estimators`, `max_depth`, `min_samples_leaf`, `min_samples_split`, `max_features`, `bootstrap`, `max_samples`, `n_jobs`, `splitter`, `max_bins`, `categorical_features`, ...).
-- `ForestRieszBackend` — `MomentBackend.fit_rows` Protocol implementation. Computes per-row moments from `estimand.augment` (grouped by `origin_index`) and packs them into EconML's linear-moment GRF. `l2` is added to each row's Jacobian inside `_RieszGRF`.
+- `ForestRieszBackend` — `MomentBackend.fit_rows` Protocol implementation. Computes per-row moments from the orchestrator's augmented data (grouped by `origin_index`) and packs them into EconML's linear-moment GRF. `l2` is added to each row's Jacobian inside `_RieszGRF`.
 - `ForestRieszRegressor` — convenience subclass of `rieszreg.RieszEstimator` with forest-specific hyperparameters (`n_estimators`, `max_depth`, `min_samples_leaf`, `honest`, `inference`, `l2`, `riesz_feature_fns`, ...) on the constructor.
 - `forestriesz.feature_fns.default_riesz_features(estimand)` — defaults for the moment-style backend's `riesz_feature_fns` for built-in estimands (treatment indicators).
 - `predict_interval(X, alpha)` — honest-split confidence intervals on the moment-style backend for the locally constant / single-basis case.
@@ -71,14 +71,14 @@ Rscript -e '
 
 `forestriesz` depends on `rieszreg` and reuses, without modification:
 
-- `Estimand`, `Tracer`/`LinearForm`, `trace`, `AugmentedDataset` — moment-functional / augmentation abstractions. The moment-style backend reads per-row moments off `estimand.augment` (`A[i, j] = −Σ_{r: origin_r = i} C_r φ_j(z_r)`). The augmentation-style backend consumes the precomputed `AugmentedDataset` from the orchestrator.
+- `Estimand`, `Tracer`/`LinearForm`, `trace`, `AugmentedDataset` — moment-functional / augmentation abstractions. The moment-style backend reads per-row moments off the augmented data passed to `fit_rows` (`A[i, j] = −Σ_{r: origin_r = i} C_r φ_j(z_r)`). The augmentation-style backend consumes the precomputed `AugmentedDataset` from the orchestrator.
 - `Loss`, `SquaredLoss`, `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss` — the Bregman-Riesz loss framework. The augmentation-style backend supports all four; the moment-style backend supports `SquaredLoss` only (v2 will extend it).
 - `Diagnostics`, `diagnose` — base diagnostics (`ForestDiagnostics` extends with feature importance, leaf-size summary).
 - `RieszEstimator` — orchestration; `ForestRieszRegressor` and `AugForestRieszRegressor` are thin subclasses with their respective backends defaulted.
 
 The augmentation-style backend additionally depends on `riesztree`'s `RieszTreeBackend` (consumed via the `Backend.fit_augmented` Protocol) — each forest tree is one riesztree fit on a block-bootstrapped subsample.
 
-The integration points are `rieszreg`'s `Backend` and `MomentBackend` Protocols (`rieszreg/backends/base.py`). `AugForestRieszBackend.fit_augmented(...)` consumes the precomputed `AugmentedDataset`; `ForestRieszBackend.fit_rows(...)` consumes the original-row feature matrix + the estimand. Both return a `FitResult`. The respective predictors register themselves on import via `register_predictor_loader("aug-forestriesz", ...)` and `register_predictor_loader("forestriesz", ...)`.
+The integration points are `rieszreg`'s `Backend` and `MomentBackend` Protocols (`rieszreg/backends/base.py`). `AugForestRieszBackend.fit_augmented(...)` consumes the precomputed `AugmentedDataset`; `ForestRieszBackend.fit_rows(...)` consumes the original-row feature matrix, the estimand and the augmented data. Both return a `FitResult`. The respective predictors register themselves on import via `register_predictor_loader("aug-forestriesz", ...)` and `register_predictor_loader("forestriesz", ...)`.
 
 ### Moment-path packing for EconML's BaseGRF
 

@@ -7,9 +7,9 @@
 
 Neural-network backend for the [RieszReg meta-package](../README.md), in the spirit of [Chernozhukov et al. (2021)](https://arxiv.org/abs/2110.03031). Trains the Riesz representer α(x) only — outcome regression is the user's responsibility.
 
-This package depends on `rieszreg` for the shared abstractions (`Estimand`, `Loss`, `MomentBackend` Protocol, `Diagnostics`, `RieszEstimator` orchestrator, `Estimand.augment`). `riesznet` contributes:
+This package depends on `rieszreg` for the shared abstractions (`Estimand`, `Loss`, `Backend` Protocol, `Diagnostics`, `RieszEstimator` orchestrator, `AugmentedDataset`). `riesznet` contributes:
 
-- `TorchBackend` — `MomentBackend` Protocol implementation. Receives the original-row feature matrix + the estimand, reads each row's evaluation points from `estimand.augment`, and minimizes the per-row Bregman-Riesz loss with a PyTorch training loop.
+- `TorchBackend` — `Backend.fit_augmented` Protocol implementation. Receives the augmented dataset, groups each original row's evaluation points by `origin_index`, and minimizes the per-row Bregman-Riesz loss with a PyTorch training loop.
 - `TorchPredictor` — wraps the trained `nn.Module` and registers itself with the rieszreg loader registry.
 - `RieszNet` — convenience subclass of `rieszreg.RieszEstimator` exposing simple-MLP defaults (`hidden_sizes`, `activation`, `dropout`, `learning_rate`, `epochs`, ...). Power users instantiate `TorchBackend(module_factory=..., optimizer_factory=...)` directly for full architecture control.
 - R6 wrapper subclassing `rieszreg::RieszEstimatorR6`.
@@ -31,7 +31,7 @@ Object-oriented factory `RieszNet(estimand=, hidden_sizes=, ...)`, `BaseEstimato
 ## Layout
 
 - `python/riesznet/`
-  - `backend.py` — `TorchBackend` (`MomentBackend.fit_rows`), `TorchPredictor`, predictor-loader registration.
+  - `backend.py` — `TorchBackend` (`Backend.fit_augmented`), `TorchPredictor`, predictor-loader registration.
   - `losses_torch.py` — `TorchRieszLoss`: torch-autograd `h̃(α(η))` and `h'(α(η))` for each Bregman loss (resolved once per loss) and the per-row Riesz loss.
   - `modules.py` — top-level default factories (`build_mlp`, `build_adam`) for the convenience class.
   - `estimator.py` — `RieszNet` convenience subclass of `RieszEstimator`.
@@ -66,7 +66,7 @@ Rscript -e '
 - `Diagnostics`, `diagnose` — base diagnostics.
 - `RieszEstimator` — orchestration; `RieszNet` is a thin subclass.
 
-The integration point is `rieszreg`'s `MomentBackend` Protocol (`rieszreg/backends/base.py`). `TorchBackend.fit_rows(...)` consumes the feature matrix + the estimand and returns a `FitResult`. `TorchPredictor` registers itself for the registry-based save/load path on import via `register_predictor_loader("riesznet", ...)`.
+The integration point is `rieszreg`'s `Backend` Protocol (`rieszreg/backends/base.py`). `TorchBackend.fit_augmented(...)` consumes the augmented datasets the orchestrator builds and returns a `FitResult`. `TorchPredictor` registers itself for the registry-based save/load path on import via `register_predictor_loader("riesznet", ...)`.
 
 ### Per-row Bregman-Riesz loss
 

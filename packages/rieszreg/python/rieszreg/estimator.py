@@ -206,7 +206,7 @@ class RieszEstimator(BaseEstimator):
         self.init = init
         self.random_state = random_state
 
-    # ---- internal accessors that resolve defaults / hyperparams ----
+    # ---- internal accessors that resolve defaults ----
 
     def _resolved_backend(self) -> Backend:
         if self.backend is None:
@@ -218,11 +218,6 @@ class RieszEstimator(BaseEstimator):
 
     def _resolved_loss(self) -> Loss:
         return self.loss if self.loss is not None else SquaredLoss()
-
-    def _backend_hyperparams(self) -> dict:
-        """Backend-specific hyperparameters routed via `hyperparams=`. Subclasses
-        override to surface their own knobs (max_depth, reg_lambda, etc.)."""
-        return {}
 
     # ---- sklearn API ----
 
@@ -291,6 +286,7 @@ class RieszEstimator(BaseEstimator):
         estimand.check_support(feats_train)
         aug_train = estimand.augment(feats_train, ys=ys_train)
         loss.check_estimand(aug_train, estimand.name)
+        aug_valid = estimand.augment(feats_valid, ys=ys_valid) if has_valid else None
 
         # init=None: the constant minimizing the empirical Riesz loss. For any
         # Bregman loss with strictly convex h that is m̄ = E[m(Z, 1)], and
@@ -303,21 +299,17 @@ class RieszEstimator(BaseEstimator):
             raise ValueError(f"init must be float or None; got {self.init!r}")
         base_score = float(loss.alpha_to_eta(init_alpha))
 
-        common_kwargs = dict(
-            base_score=base_score,
-            random_state=self.random_state,
-            hyperparams=self._backend_hyperparams(),
-        )
+        common_kwargs = dict(base_score=base_score, random_state=self.random_state)
 
-        # Moment-style backends take the feature arrays + estimand; everything
-        # else (including backends implementing both) gets the augmented data.
+        # Moment-style backends also take the feature arrays + estimand;
+        # everything else (including backends implementing both) gets only
+        # the augmented data.
         if hasattr(backend, "fit_rows") and not hasattr(backend, "fit_augmented"):
             result = backend.fit_rows(
                 feats_train, feats_valid, estimand, loss,
-                ys_train=ys_train, ys_valid=ys_valid, **common_kwargs,
+                aug_train=aug_train, aug_valid=aug_valid, **common_kwargs,
             )
         else:
-            aug_valid = estimand.augment(feats_valid, ys=ys_valid) if has_valid else None
             result = backend.fit_augmented(aug_train, aug_valid, loss, **common_kwargs)
 
         self.predictor_ = result.predictor

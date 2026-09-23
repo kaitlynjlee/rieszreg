@@ -6,13 +6,13 @@ title: "Neural-network backend (riesznet)"
 
 `riesznet` trains the Riesz representer α(x) with a PyTorch model, in the spirit of [Chernozhukov et al. (2021), *RieszNet and ForestRiesz*](https://arxiv.org/abs/2110.03031). It fits the Riesz representer only — outcome regression is handled separately.
 
-`rieszreg` exposes the entry point as `MomentBackend.fit_rows`. The neural backend uses the per-row moment formulation: for each original row `z_i`,
+The backend implements `Backend.fit_augmented` and groups the augmented rows by original row: for each original row `z_i`,
 
 $$
 L_i = \tilde h(\alpha(z_i)) - \sum_{j} c_j \cdot h'(\alpha(p_j))
 $$
 
-where the `(c_j, p_j)` pairs are the evaluation points of `m` at `z_i` and the model produces α via a Bregman link. The backend reads these points from `estimand.augment`, so the built-in estimands need no per-row Python work. Each minibatch evaluates the network only at its own rows' points. The training loop minimizes the mean of `L_i` with autograd.
+where the `(c_j, p_j)` pairs are the evaluation points of `m` at `z_i` and the model produces α via a Bregman link. These points come from the augmented dataset the orchestrator builds with `estimand.augment`, so the built-in estimands need no per-row Python work. Each minibatch evaluates the network only at its own rows' points. The training loop minimizes the mean of `L_i` with autograd.
 
 ## Two surfaces
 

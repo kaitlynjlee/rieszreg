@@ -9,7 +9,7 @@ predictor applies `loss.link_to_alpha` to convert to α space.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Sequence
 
 import numpy as np
 import xgboost as xgb
@@ -122,10 +122,9 @@ def _make_metric(aug_valid: AugmentedDataset, loss: Loss):
 @dataclass
 class XGBoostBackend:
     """Default backend. Construct with the boosting-loop knobs (n_estimators,
-    learning_rate, early_stopping_rounds) plus stability tweaks
-    (hessian_floor, gradient_only). Other xgboost passthrough params
-    (max_depth, reg_lambda, subsample) come via ``hyperparams`` from
-    RieszBooster.
+    learning_rate, early_stopping_rounds), the xgboost tree params
+    (max_depth, reg_lambda, subsample) and stability tweaks (hessian_floor,
+    gradient_only).
 
     ``hessian_floor`` is the lower bound on each row's Hessian. Counterfactual
     rows have a true Hessian of 0, so without a floor xgboost's Newton leaf
@@ -137,6 +136,9 @@ class XGBoostBackend:
 
     n_estimators: int = 200
     learning_rate: float = 0.05
+    max_depth: int = 4
+    reg_lambda: float = 1.0
+    subsample: float = 1.0
     early_stopping_rounds: int | None = None
     validation_fraction: float = 0.0
     hessian_floor: float | str = "auto"
@@ -150,7 +152,6 @@ class XGBoostBackend:
         *,
         base_score: float,
         random_state: int,
-        hyperparams: dict[str, Any],
     ) -> FitResult:
         dtrain = xgb.DMatrix(aug_train.features)
 
@@ -159,7 +160,9 @@ class XGBoostBackend:
             "base_score": base_score,
             "seed": random_state,
             "disable_default_eval_metric": 1,
-            **hyperparams,
+            "max_depth": self.max_depth,
+            "reg_lambda": self.reg_lambda,
+            "subsample": self.subsample,
         }
 
         # The held-out metric only drives early stopping; without it, skip the

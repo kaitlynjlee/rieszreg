@@ -1,9 +1,9 @@
-"""TorchBackend — implements ``rieszreg.MomentBackend``.
+"""TorchBackend — implements ``rieszreg.Backend``.
 
-Consumes the original rows + the estimand directly (the moment-style entry
-point), gets each row's evaluation points from ``estimand.augment``, and
-minimizes the per-row Bregman-Riesz loss with a PyTorch training loop.
-Returns a ``FitResult`` whose predictor is a ``TorchPredictor``.
+Consumes the ``AugmentedDataset``, groups the augmented rows by origin row,
+and minimizes the per-row Bregman-Riesz loss with a PyTorch training loop
+over minibatches of original rows. Returns a ``FitResult`` whose predictor
+is a ``TorchPredictor``.
 """
 
 from __future__ import annotations
@@ -19,13 +19,7 @@ from typing import Any, Callable, ClassVar, Iterable
 import numpy as np
 import torch
 
-from rieszreg import (
-    AugmentedDataset,
-    Estimand,
-    FitResult,
-    Loss,
-    register_predictor_loader,
-)
+from rieszreg import AugmentedDataset, FitResult, Loss, register_predictor_loader
 from rieszreg.losses import loss_from_spec
 
 from .losses_torch import TorchRieszLoss
@@ -207,7 +201,6 @@ class TorchPredictor:
     dtype: str
     device: str
     factory_metadata: dict
-    feature_keys: tuple[str, ...] = field(default_factory=tuple)
     snapshot_state_dicts: dict[int, dict[str, torch.Tensor]] | None = None
     snapshot_epochs: tuple[int, ...] | None = None
 
@@ -317,7 +310,6 @@ class TorchPredictor:
             "dtype": self.dtype,
             "device": self.device,
             "factory": self.factory_metadata,
-            "feature_keys": list(self.feature_keys),
             "snapshot_epochs": (
                 list(self.snapshot_epochs)
                 if self.snapshot_epochs is not None
@@ -372,7 +364,6 @@ class TorchPredictor:
             dtype=dtype,
             device=device,
             factory_metadata=meta["factory"],
-            feature_keys=tuple(meta.get("feature_keys", ())),
             snapshot_state_dicts=snap_state_dicts,
             snapshot_epochs=(
                 tuple(int(e) for e in snap_epochs) if snap_epochs else None
@@ -406,10 +397,9 @@ def _default_optimizer_factory(params):  # pragma: no cover - placeholder
 class TorchBackend:
     """Neural-network Riesz regression backend (PyTorch).
 
-    Implements ``rieszreg.MomentBackend.fit_rows``: consumes the original rows
-    and the estimand, gets each row's evaluation points from
-    ``estimand.augment``, and minimizes the per-row Bregman-Riesz loss with a
-    PyTorch training loop.
+    Implements ``rieszreg.Backend.fit_augmented``: groups the augmented rows
+    by origin row and minimizes the per-row Bregman-Riesz loss with a
+    PyTorch training loop over minibatches of original rows.
 
     Parameters
     ----------
@@ -448,22 +438,17 @@ class TorchBackend:
     validation_fraction: float = 0.0
     snapshot_epochs: tuple[int, ...] = ()
 
-    def fit_rows(
+    def fit_augmented(
         self,
-        X_train: np.ndarray,
-        X_valid: np.ndarray | None,
-        estimand: Estimand,
+        aug_train: AugmentedDataset,
+        aug_valid: AugmentedDataset | None,
         loss: Loss,
         *,
         base_score: float,
         random_state: int,
-        hyperparams: dict[str, Any],
-        ys_train: np.ndarray | None = None,
-        ys_valid: np.ndarray | None = None,
     ) -> FitResult:
-        del hyperparams  # torch backend has no string-keyed passthrough
         torch_loss = TorchRieszLoss(loss)
-        if X_valid is None and self.early_stopping_rounds is not None:
+        if aug_valid is None and self.early_stopping_rounds is not None:
             raise ValueError(
                 "early_stopping_rounds requires a validation set. Set "
                 "validation_fraction>0 (or pass eval_set=) when fitting."
@@ -478,15 +463,11 @@ class TorchBackend:
 
         device = _resolve_device(self.device, self.dtype)
         dtype = _resolve_dtype(self.dtype)
-        input_dim = int(X_train.shape[1])
+        input_dim = int(aug_train.features.shape[1])
 
         # ---- data: each row's evaluation points, grouped by row ----
-        train = _AugTensors.build(estimand.augment(X_train, ys=ys_train), device, dtype)
-        valid = (
-            _AugTensors.build(estimand.augment(X_valid, ys=ys_valid), device, dtype)
-            if X_valid is not None
-            else None
-        )
+        train = _AugTensors.build(aug_train, device, dtype)
+        valid = _AugTensors.build(aug_valid, device, dtype) if aug_valid is not None else None
 
         # ---- build model + optimizer ----
         model = self.module_factory(input_dim).to(device=device, dtype=dtype)
@@ -567,7 +548,6 @@ class TorchBackend:
             dtype=self.dtype,
             device=str(device),
             factory_metadata=factory_meta,
-            feature_keys=tuple(estimand.feature_keys),
             snapshot_state_dicts=snapshots if retained_epochs else None,
             snapshot_epochs=retained_epochs if retained_epochs else None,
         )

@@ -54,11 +54,13 @@ class _AugOnlyBackend:
 class _MomentOnlyBackend:
     calls: list[str] = field(default_factory=list)
     last_X: np.ndarray | None = None
+    last_aug: AugmentedDataset | None = None
     last_estimand_name: str | None = None
 
-    def fit_rows(self, X_train, X_valid, estimand, loss, **kwargs) -> FitResult:
+    def fit_rows(self, X_train, X_valid, estimand, loss, *, aug_train, aug_valid, **kwargs) -> FitResult:
         self.calls.append("fit_rows")
         self.last_X = X_train
+        self.last_aug = aug_train
         self.last_estimand_name = estimand.name
         return FitResult(predictor=_ConstPredictor(0.0))
 
@@ -123,3 +125,4 @@ def test_moment_path_passes_validation_rows(df):
     assert backend.calls == ["fit_rows"]
     # With backend.validation_fraction=0.2, train has 40 rows, valid has 10.
     assert backend.last_X.shape == (40, 2)
+    assert backend.last_aug.n_rows == 40
