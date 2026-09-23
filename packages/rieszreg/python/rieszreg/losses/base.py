@@ -261,6 +261,18 @@ class Loss:
         h2 = (L_plus - 2.0 * L_zero + L_minus) / (eps * eps)
         return np.maximum(h2, hessian_floor)
 
+    def curvature_eta(self, eta):
+        """Curvature of an observed row's loss term in η: ``h''(α) · (dα/dη)²``
+        at ``α = link(η)`` (the Gauss-Newton / Fisher term). Boosting backends
+        use it as the per-row Hessian floor, so counterfactual rows (true
+        Hessian 0) are weighted like observed rows at the current prediction.
+        Numerical by default; built-in losses override analytically."""
+        eps = 1e-5
+        alpha = self.link_to_alpha(eta)
+        d_alpha = (self.link_to_alpha(eta + eps) - self.link_to_alpha(eta - eps)) / (2 * eps)
+        h2 = (self.potential_deriv(alpha + eps) - self.potential_deriv(alpha - eps)) / (2 * eps)
+        return h2 * d_alpha**2
+
     # ---- Initialization ----
 
     def best_constant_init(self, m_bar: float) -> float:
