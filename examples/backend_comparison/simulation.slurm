@@ -1,8 +1,8 @@
 #!/bin/bash
-# Savio SLURM job for run_backend_comparison.py. One node, one task, many
+# Savio SLURM job for simulation.py. One node, one task, many
 # cores -- reps are embarrassingly parallel, so --n_jobs=$SLURM_CPUS_PER_TASK
 # runs that many reps concurrently inside a single Python process (see
-# `Parallel(n_jobs=...)` in run_backend_comparison.py), rather than
+# `run_simulation` in simulation.py), rather than
 # using a SLURM array.
 #
 # FILL IN before submitting: --account, --partition, --qos, --time, the
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-# Pin every worker process to one BLAS/OMP thread. run_backend_comparison.py
+# Pin every worker process to one BLAS/OMP thread. simulation.py
 # spawns $SLURM_CPUS_PER_TASK worker processes (one per concurrent rep); if
 # each of those also tries to multi-thread its own xgboost/BLAS calls, you
 # oversubscribe the node (24 workers x 24 threads each on 24 cores). These
@@ -37,15 +37,17 @@ source activate <FILL_IN: your conda env name>
 #   conda create -n rieszreg python=3.11
 #   conda activate rieszreg
 #   pip install -e packages/rieszreg/python -e packages/rieszboost/python \
-#       -e packages/krrr/python -e packages/forestriesz/python \
-#       -e packages/riesznet/python -e packages/riesztree/python \
-#       xgboost scikit-learn pandas numpy joblib
+#       -e packages/riesznet/python \
+#       xgboost torch scikit-learn pandas numpy scipy joblib
 
 BACKEND_COMPARISON_DIR=<FILL_IN: /path/to/rieszreg/examples/backend_comparison>
 cd "$BACKEND_COMPARISON_DIR"
-mkdir -p logs results
+mkdir -p logs
 
-python run_backend_comparison.py \
-    --n_reps 20 \
-    --n_jobs "${SLURM_CPUS_PER_TASK}" \
-    --out_csv "results/run_${SLURM_JOB_ID}.csv"
+# Writes results/hard_n2000/{results,tuning}.csv. Finished fits are cached in
+# cache/, so resubmitting after a timeout refits only what is missing.
+python simulation.py \
+    --dgp hard \
+    --n 2000 \
+    --reps 20 \
+    --n_jobs "${SLURM_CPUS_PER_TASK}"
