@@ -16,7 +16,8 @@
 #
 # Pilot (reps 0-119):  sbatch --array=0-2  savio.sh
 # Full (reps 0-999):   sbatch --array=0-24 savio.sh
-# Then:                uv run python run.py summarize    (with the same RIESZ_SIM_OUT)
+# Then, on a login node (the results are on scratch, not in this folder):
+#   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim uv run python run.py summarize
 #
 #SBATCH --job-name=ls_10cov
 #SBATCH --account=ACCOUNT_NAME
