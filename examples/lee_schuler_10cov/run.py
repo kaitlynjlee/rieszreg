@@ -67,7 +67,10 @@ NET = dict(max_iter=1000, patience=10, hidden_sizes=(200, 200, 200), weight_deca
 
 XGB_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2], max_depth=[3, 5, 7])
 RIESZNET_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2, 1e-1])
-FOREST_GRID = _grid(min_samples_leaf=[2, 5, 10, 20, 50])
+# The 120-replicate pilot of {2, 5, 10, 20, 50} chose 50 for the ATT 38% of
+# the time and 2 almost never, so the grid moved up. Each tree samples 45% of
+# the rows (about 180-225), so a leaf of 200 would leave trees unsplit.
+FOREST_GRID = _grid(min_samples_leaf=[5, 10, 20, 50, 100])
 
 
 # ------------------------------------------------------------ learners ---
@@ -157,8 +160,13 @@ def row_loss(kind, data, preds):
 # that path. Boosting is sequential with a seeded row subsample, so the first
 # t trees of that fit are the trees a fit stopped at t would have.
 
+# The 120-replicate pilot of reg_lambda {0, 1, 10} chose 10, the top, in 73%
+# (ATE) and 67% (ATT) of replicates, and 10 had the smallest median regret
+# for both, so lambda moved up. lambda = 0 and 1 barely differ here, since a
+# leaf's curvature sum 2n is far above 1. Learning rate, depth and patience
+# had interior regret minima or a flat regret surface, so they stayed.
 L2_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2], max_depth=[1, 2, 3, 5],
-                reg_lambda=[0.0, 1.0, 10.0], patience=[10, 50, 200])
+                reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[10, 50, 200])
 
 
 def _eta_path(b, Z):
