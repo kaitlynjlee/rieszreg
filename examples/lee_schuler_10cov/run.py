@@ -345,10 +345,33 @@ def tuning():
     return "\n".join(lines)
 
 
+def cache_status():
+    """What is in the cache, per component: files written by the current code
+    (matching cache key), files from other code or package versions, and
+    failed fits with their first error."""
+    lines = [f"cache: {CACHE}" + ("" if CACHE.exists() else "  (does not exist)")]
+    if "RIESZ_SIM_OUT" not in os.environ:
+        lines.append("RIESZ_SIM_OUT is not set; savio.sh writes to /global/scratch/users/$USER/rieszreg_sim")
+    for comp in COMPONENTS:
+        files = list((CACHE / comp).glob("rep*.pkl"))
+        key = cache_key(comp)
+        current = [f for f in files if f.stem.endswith(key)]
+        failed = [pd.read_pickle(f)["record"].get("error") for f in current]
+        failed = [e for e in failed if e]
+        line = f"  {comp:16s} {len(current):5d} current, {len(files) - len(current):5d} with another key, {len(failed)} failed"
+        if failed:
+            line += f"; first error: {failed[0][:200]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def summarize():
     df = estimates()
     if df.empty:
-        print("no results yet")
+        print("No results to summarize. What the cache holds:")
+        print(cache_status())
+        print("'another key' means the files came from different code or package versions than this "
+              "checkout and environment; rerun, or summarize with the environment that wrote them.")
         return
     RESULTS.mkdir(parents=True, exist_ok=True)
     df.to_csv(RESULTS / "estimates.csv", index=False)
