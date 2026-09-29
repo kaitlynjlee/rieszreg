@@ -34,11 +34,12 @@ ForestRiesz is not in the manuscript.
 
 `rieszboost_l2` is a second rieszboost learner, not the manuscript's protocol, fit on the same datasets so each replicate gives a paired comparison with `rieszboost`:
 
-- **Grid:** learning rate {1e-3, 3e-3, 1e-2, 3e-2} × depth {1, 2, 3, 5} × L2 penalty on leaf values `reg_lambda` {3, 10, 30, 100} × early-stopping patience {10, 50, 200}. Otherwise its fixed settings are rieszboost's.
+- **Grid:** learning rate {1e-3, 3e-3, 1e-2, 3e-2} × depth {1, 2, 3, 5} × L2 penalty on leaf values `reg_lambda` {3, 10, 30, 100}, with early-stopping patience fixed at 50. Otherwise its fixed settings are rieszboost's.
+- **Why patience is fixed:** riesznet's patience isn't tuned, so this one isn't either. In the pilot's patience grid {10, 50, 200}, 50 had the smallest median regret for both estimands.
 - **Why this grid:** the pilot of the manuscript grid chose the largest learning rate and the smallest depth often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree cap.
 - **Why λ moved up:** in the pilot with λ ∈ {0, 1, 10}, λ = 10 was chosen in 73% (ATE) and 67% (ATT) of replicates and had the smallest median regret for both.
 - **What the L2 penalty does:** it shrinks a leaf of n augmented rows by 2n / (2n + λ), which damps the few-row leaves that produce extreme α̂ where overlap is weak.
-- **Why patience costs no extra fits:** each fit runs at patience 200, and early stopping at 10 and 50 is replayed on its per-tree validation-loss path. Boosting is sequential with a seeded subsample, so this equals a fresh fit at that patience. `replay_matches_booster` in each record checks the replay at patience 200 against the booster's own stopping point.
+- **Patience grids cost no extra fits:** the code still accepts a patience grid. Each fit runs at the largest patience, and early stopping at the smaller ones is replayed on its per-tree validation-loss path, which equals a fresh fit at that patience. `replay_matches_booster` in each record checks the replay at the largest patience against the booster's own stopping point.
 
 To add it to replicates that are already cached, fit only this learner:
 
