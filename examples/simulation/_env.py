@@ -16,7 +16,7 @@ for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ[var] = "1"
 
 REPO = Path(__file__).resolve().parents[2]
-PACKAGE_DIRS = [str(REPO / "packages" / p / "python") for p in ("rieszreg", "rieszboost", "riesznet")]
+PACKAGE_DIRS = [str(REPO / "packages" / p / "python") for p in ("rieszreg", "rieszboost", "riesznet", "riesztree", "forestriesz")]
 for p in PACKAGE_DIRS:
     if p not in sys.path:
         sys.path.insert(0, p)
