@@ -34,7 +34,8 @@ ForestRiesz is not in the manuscript.
 
 `rieszboost_l2` is a second rieszboost learner, not the manuscript's protocol, fit on the same datasets so each replicate gives a paired comparison with `rieszboost`:
 
-- **Grid:** learning rate {1e-3, 3e-3, 1e-2, 3e-2} × depth {1, 2, 3, 5} × L2 penalty on leaf values `reg_lambda` {3, 10, 30, 100}, with early-stopping patience fixed at 50 and a subsample of 0.8 of individuals per round (rieszboost uses 0.9). Otherwise its fixed settings are rieszboost's.
+- **Grid:** learning rate {3e-3, 1e-2, 3e-2, 1e-1} × depth {1, 2, 3, 5} × L2 penalty on leaf values `reg_lambda` {3, 10, 30, 100}, with early-stopping patience fixed at 50 and a subsample of 0.8 of individuals per round (rieszboost uses 0.9). Otherwise its fixed settings are rieszboost's.
+- **Why the learning rate moved up:** in the pilot the regret surface was flat along the learning rate, 1e-3 took most of the compute and produced every refit at the tree cap, and the ATE chose 3e-2, the top, 43% of the time.
 - **Why patience is fixed:** riesznet's patience isn't tuned, so this one isn't either. In the pilot's patience grid {10, 50, 200}, 50 had the smallest median regret for both estimands.
 - **Why this grid:** the pilot of the manuscript grid chose the largest learning rate and the smallest depth often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree cap.
 - **Why λ moved up:** in the pilot with λ ∈ {0, 1, 10}, λ = 10 was chosen in 73% (ATE) and 67% (ATT) of replicates and had the smallest median regret for both.
