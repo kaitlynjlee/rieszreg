@@ -171,13 +171,18 @@ def row_loss(kind, data, preds):
 # either. In the pilot's {10, 50, 200}, 50 had the smallest median regret for
 # both estimands. The replay code below still accepts a patience grid.
 #
+# lambda moved up one step from {3, 10, 30, 100}: after 120 replicates the
+# smallest median regret was at lambda = 100 for both estimands, with four of
+# the top five settings at 100 (the regret surface is flat, so expect a small
+# gain).
+#
 # The learning rate moved up one step from {1e-3, 3e-3, 1e-2, 3e-2}: the
 # pilot's regret surface was flat along it (top settings within 0.01), 1e-3
 # accounted for most of the compute and every refit at the tree cap, and the
 # ATE chose 3e-2, the top, 43% of the time. Larger lambda shrinks every leaf,
 # which acts like a smaller learning rate, so 0.1 pairs with lambda 30-100.
 L2_GRID = _grid(learning_rate=[3e-3, 1e-2, 3e-2, 1e-1], max_depth=[1, 2, 3, 5],
-                reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[50])
+                reg_lambda=[10.0, 30.0, 100.0, 300.0], patience=[50])
 L2_SUBSAMPLE = 0.8    # share of individuals drawn per round (the manuscript's rieszboost uses 0.9)
 
 
