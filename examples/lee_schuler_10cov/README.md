@@ -32,6 +32,22 @@ This follows the manuscript's Section 3.3 and Appendix C.2.3.
 
 ForestRiesz is not in the manuscript.
 
+`rieszboost_l2` is a second rieszboost learner, not the manuscript's protocol, fit on the same datasets so each replicate gives a paired comparison with `rieszboost`:
+
+- **Grid:** learning rate {1e-3, 3e-3, 1e-2, 3e-2} × depth {1, 2, 3, 5} × L2 penalty on leaf values `reg_lambda` {0, 1, 10} × early-stopping patience {10, 50, 200}. Otherwise its fixed settings are rieszboost's.
+- **Why this grid:** the pilot of the manuscript grid chose the largest learning rate and the smallest depth often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree cap.
+- **What the L2 penalty does:** it shrinks a leaf of n augmented rows by 2n / (2n + λ), which damps the few-row leaves that produce extreme α̂ where overlap is weak.
+- **Why patience costs no extra fits:** each fit runs at patience 200, and early stopping at 10 and 50 is replayed on its per-tree validation-loss path. Boosting is sequential with a seeded subsample, so this equals a fresh fit at that patience. `replay_matches_booster` in each record checks the replay at patience 200 against the booster's own stopping point.
+
+To add it to replicates that are already cached, fit only this learner:
+
+```sh
+RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim uv run python run.py run --reps 0:120 \
+    --components rieszboost_l2_ATE rieszboost_l2_ATT --jobs 32
+```
+
+Run this inside a Slurm job. A plain `sbatch savio.sh` array fits it as well, since every uncached pair gets fit.
+
 On the first replicate, the outcome regression and rieszboost both picked learning rate 0.01, the largest value in the grid. The `summarize` tuning check reports how often each learner lands on an edge of its grid. If one lands there consistently, its grid should move.
 
 The seeds and draw order match `examples/simulation/lee_schuler_icml.py`, which also runs the authors' own code (`icml_rieszboost`) on the same datasets. The two studies therefore pair replicate by replicate.
