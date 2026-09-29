@@ -86,7 +86,7 @@ test_that("save / load round-trips a RieszBooster from R", {
 })
 
 
-test_that("Python-saved RieszBooster loads in R with bitwise-identical predictions", {
+test_that("R-saved RieszBooster loads in Python with identical predictions", {
   s <- simulate(400L, seed = 9L)
   booster <- RieszBooster$new(estimand = ATE("a", "x"),
                               n_estimators = 30L, learning_rate = 0.1,
@@ -110,7 +110,7 @@ test_that("Python-saved RieszBooster loads in R with bitwise-identical predictio
 })
 
 
-test_that("R and Python predictions are bitwise-identical on the same data", {
+test_that("R data.frame and pandas input give identical predictions", {
   s <- simulate(400L, seed = 4L)
   booster <- RieszBooster$new(estimand = ATE("a", "x"),
                               n_estimators = 50L, learning_rate = 0.1,
