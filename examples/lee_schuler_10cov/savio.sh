@@ -43,4 +43,5 @@ export PYTHONUNBUFFERED=1
 cd "$HOME/rieszreg/examples/lee_schuler_10cov"
 mkdir -p logs
 echo "array task $SLURM_ARRAY_TASK_ID: reps $LO to $((HI - 1)) on $SLURM_CPUS_PER_TASK cores"
+echo "code: $(git rev-parse --short HEAD)$(git diff --quiet HEAD -- . ../../packages || echo ' with uncommitted changes')"
 uv run python -u run.py run --reps "$LO:$HI" --jobs "$SLURM_CPUS_PER_TASK" ${OVERWRITE:+--overwrite} ${COMPONENTS:+--components $COMPONENTS}
