@@ -29,6 +29,7 @@ import importlib.metadata as md
 import inspect
 import itertools
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -550,6 +551,55 @@ def summarize():
     print(tuning())
 
 
+def status():
+    """Per component: cache files under the current key and under each older
+    key, with the newest file's time. Older keys come from different code or
+    package versions and are ignored by summarize."""
+    import datetime
+    print(f"cache: {CACHE}")
+    for comp in COMPONENTS:
+        new = cache_key(comp)
+        by_key = {}
+        for f in (CACHE / comp).glob("rep*.pkl"):
+            by_key.setdefault(f.stem.rsplit("_", 1)[1], []).append(f.stat().st_mtime)
+        parts = []
+        for k, ts in sorted(by_key.items(), key=lambda kv: (kv[0] != new, -max(kv[1]))):
+            when = datetime.datetime.fromtimestamp(max(ts)).strftime("%m-%d %H:%M")
+            parts.append(f"{'current' if k == new else k}: {len(ts)} (newest {when})")
+        print(f"  {comp:18s} " + ("; ".join(parts) if parts else "none"))
+
+
+def rekey(comps, from_key=None, dry_run=False):
+    """Copy each component's cache files from an older cache key to the
+    current one, keeping the originals.
+
+    The cache key hashes the whole source of the rieszreg packages a learner
+    uses, so any edit there (a docstring, a save/load change) orphans every
+    cached fit, even when the fits themselves would not change. Use this only
+    after checking that the change leaves the fits unchanged, for example by
+    refitting one replicate with the new code and comparing it with the old
+    cache file. With several older keys present, pass --from-key.
+    """
+    for comp in comps:
+        new = cache_key(comp)
+        files = sorted((CACHE / comp).glob("rep*.pkl"))
+        keys = sorted({f.stem.rsplit("_", 1)[1] for f in files} - {new})
+        if from_key is None and len(keys) != 1:
+            print(f"{comp}: {len(keys)} older keys {keys}; pass --from-key to pick one")
+            continue
+        src = from_key or keys[0]
+        moved = 0
+        for f in files:
+            if f.stem.endswith(src):
+                rep = int(f.name[3:].split("_")[0])
+                dst = cache_path(comp, rep, new)
+                if not dst.exists():
+                    if not dry_run:
+                        shutil.copy2(f, dst)
+                    moved += 1
+        print(f"{comp}: {'would copy' if dry_run else 'copied'} {moved} files from key {src} to {new}")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -560,9 +610,18 @@ if __name__ == "__main__":
     r.add_argument("--overwrite", action="store_true",
                    help="refit and replace cached pairs, deleting their files from older code")
     sub.add_parser("summarize")
+    sub.add_parser("status", help="cached fits per learner, by cache key")
+    k = sub.add_parser("rekey", help="reuse cached fits after a code change verified not to alter them")
+    k.add_argument("--components", nargs="+", required=True)
+    k.add_argument("--from-key", default=None)
+    k.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "run":
         lo, hi = (int(v) for v in a.reps.split(":"))
         run(range(lo, hi), a.components or list(COMPONENTS), a.jobs, a.overwrite)
+    elif a.cmd == "rekey":
+        rekey(a.components, a.from_key, a.dry_run)
+    elif a.cmd == "status":
+        status()
     else:
         summarize()
