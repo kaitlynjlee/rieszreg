@@ -70,6 +70,12 @@ BOOST = dict(max_iter=20000, patience=200, subsample=0.9)
 NET = dict(max_iter=1000, patience=10, hidden_sizes=(200, 200, 200), weight_decay=1e-3, batch_size=64)
 
 XGB_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2], max_depth=[3, 5, 7])
+# A trial outcome regression, not the manuscript's: the 120-replicate pilot of
+# XGB_GRID had its smallest median regret at learning rate 1e-2 (the top) and
+# depth 3 (the bottom), 0.06 ahead of the next setting, and never chose 1e-5
+# or 1e-4, which run to the tree cap. Patience and subsample are unchanged.
+# `summarize --outcome outcome_shifted` uses it for every method's estimates.
+OUTCOME_SHIFTED_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2, 1e-1], max_depth=[1, 2, 3, 5])
 RIESZNET_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2, 1e-1])
 # The 120-replicate pilot of {2, 5, 10, 20, 50} chose 50 for the ATT 38% of
 # the time and 2 almost never, so the grid moved up. Each tree samples 45% of
@@ -281,6 +287,7 @@ COMPONENTS = {
     **{f"rieszboost_l2_{e}": (None, L2_GRID, e, BOOST["max_iter"], rieszboost_l2(e)) for e in ESTIMANDS},
     **{f"rieszboost_{e}": (rieszboost(e), XGB_GRID, e, BOOST["max_iter"]) for e in ESTIMANDS},
     "outcome": (outcome_xgb, XGB_GRID, "outcome", BOOST["max_iter"]),
+    "outcome_shifted": (outcome_xgb, OUTCOME_SHIFTED_GRID, "outcome", BOOST["max_iter"]),
     **{f"riesznet_{e}": (riesznet(e), RIESZNET_GRID, e, NET["max_iter"]) for e in ESTIMANDS},
     **{f"forestriesz_{e}": (forestriesz(e), FOREST_GRID, e, None) for e in ESTIMANDS},
 }
@@ -329,7 +336,7 @@ def cache_key(comp):
     and the source of the rieszreg packages it uses."""
     fit, grid, kind, cap = COMPONENTS[comp][:4]
     stem = comp.rsplit("_", 1)[0] if comp.endswith(ESTIMANDS) else comp
-    parts = [inspect.getsource(globals()[stem if stem != "outcome" else "outcome_xgb"]),
+    parts = [inspect.getsource(globals()["outcome_xgb" if stem.startswith("outcome") else stem]),
              repr((grid, kind, cap, BOOST, NET, BASE_SEED, N, K, SEED, VALID_FRAC)),
              inspect.getsource(cv_select), inspect.getsource(row_loss), inspect.getsource(data),
              inspect.getsource(dgp), repr(sorted(_versions().items()))]
@@ -443,13 +450,17 @@ def one_step(estimand, d, mu, alpha):
     return float(est), float(phi.std(ddof=1) / np.sqrt(len(y)))
 
 
-def estimates():
-    """One row per (replicate, estimand, method)."""
-    mu = load("outcome")
-    fits = {c: load(c) for c in COMPONENTS if c != "outcome"}
+OUTCOMES = ("outcome", "outcome_shifted")
+
+
+def estimates(outcome="outcome", reps=None):
+    """One row per (replicate, estimand, method), every method using the
+    outcome regression `outcome`; `reps` restricts the replicates."""
+    mu = load(outcome)
+    fits = {c: load(c) for c in COMPONENTS if c not in OUTCOMES}
     rows = []
     for rep in sorted(mu):
-        if mu[rep]["preds"] is None:
+        if mu[rep]["preds"] is None or (reps is not None and rep not in reps):
             continue
         d, _ = data(rep)
         X, A = d[dgp.COV].to_numpy(), d["A"].to_numpy()
@@ -562,8 +573,29 @@ def cache_status():
     return "\n".join(lines)
 
 
-def summarize():
-    df = estimates()
+def outcome_error(outcome="outcome", reps=None):
+    """RMSE of mu-hat against mu_0 at the observed (A, X), and of
+    tau-hat = mu-hat(1, X) - mu-hat(0, X) against tau_0, on the estimation
+    set, averaged over replicates with its MCSE."""
+    rows = []
+    for rep, g in sorted(load(outcome).items()):
+        if g["preds"] is None or (reps is not None and rep not in reps):
+            continue
+        d, _ = data(rep)
+        X, A, m = d[dgp.COV].to_numpy(), d["A"].to_numpy(), g["preds"]
+        tau0 = dgp.outcome(1.0, X) - dgp.outcome(0.0, X)
+        rows.append((np.sqrt(np.mean((m["mu"] - dgp.outcome(A, X)) ** 2)),
+                     np.sqrt(np.mean((m["mu1"] - m["mu0"] - tau0) ** 2))))
+    if not rows:
+        return f"{outcome}: no fits"
+    a = np.array(rows)
+    se = a.std(axis=0, ddof=1) / np.sqrt(len(a))
+    return (f"{outcome} ({len(a)} replicates): RMSE of mu-hat vs mu_0 {a[:, 0].mean():.3f} (MCSE {se[0]:.3f}), "
+            f"of tau-hat vs tau_0 {a[:, 1].mean():.3f} (MCSE {se[1]:.3f})")
+
+
+def summarize(outcome="outcome", reps=None):
+    df = estimates(outcome, reps)
     if df.empty:
         print("No results to summarize. What the cache holds:")
         print(cache_status())
@@ -571,11 +603,17 @@ def summarize():
               "checkout and environment; rerun, or summarize with the environment that wrote them.")
         return
     RESULTS.mkdir(parents=True, exist_ok=True)
-    df.to_csv(RESULTS / "estimates.csv", index=False)
+    tag = "" if outcome == "outcome" else f"_{outcome}"
+    if reps is not None:
+        tag += f"_reps{min(reps)}-{max(reps)}"
+    df.to_csv(RESULTS / f"estimates{tag}.csv", index=False)
     t = table(df)
-    t.to_csv(RESULTS / "table.csv", index=False)
+    t.to_csv(RESULTS / f"table{tag}.csv", index=False)
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 30)
+    print(f"Outcome regression: {outcome}" + ("" if reps is None else f"; replicates {min(reps)} to {max(reps)}"))
+    for o in OUTCOMES:
+        print("  " + outcome_error(o, reps))
     print("Representer accuracy (manuscript Table 1) and one-step estimator (Table 2), with MCSEs:")
     print(t.round(3).to_string(index=False))
     paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()])
@@ -642,7 +680,10 @@ if __name__ == "__main__":
     r.add_argument("--jobs", type=int, default=1)
     r.add_argument("--overwrite", action="store_true",
                    help="refit and replace cached pairs, deleting their files from older code")
-    sub.add_parser("summarize")
+    sm = sub.add_parser("summarize")
+    sm.add_argument("--outcome", default="outcome", choices=["outcome", "outcome_shifted"],
+                    help="the outcome regression every method's estimate uses")
+    sm.add_argument("--reps", default=None, help="half-open range, e.g. 0:80; default: all")
     t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
     t.add_argument("rep", type=int)
     t.add_argument("component")
@@ -663,4 +704,5 @@ if __name__ == "__main__":
     elif a.cmd == "status":
         status()
     else:
-        summarize()
+        reps = None if a.reps is None else set(range(*(int(v) for v in a.reps.split(":"))))
+        summarize(a.outcome, reps)
