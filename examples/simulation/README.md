@@ -18,6 +18,8 @@ paper.
 | `savio_run.ipynb` | Interactive runs on Savio (or anywhere): run, tuning checks, tables, pilot check |
 | `_make_notebook.py` | Writes `savio_run.ipynb`; edit this, then `python3 _make_notebook.py savio_run.ipynb` |
 | `lee_schuler.py` | Lee & Schuler (2025) Section 3.1 with their protocol (one 500/500 split, their grid) |
+| `lee_schuler_icml.py` | Replication of the RieszBoost ICML manuscript, Section 3.3 (10 confounders, ATE and ATT): the authors' code as coded, our packages, and ForestRiesz |
+| `savio_lee_schuler_icml.sh` | Slurm array for `lee_schuler_icml.py` (blocks of replicates per node) |
 | `diagnose_boosting.py`, `diagnose_nuisance.py` | Diagnostics: boosting learning curves, and the mu-hat x alpha-hat crossing |
 
 Run from this directory:
