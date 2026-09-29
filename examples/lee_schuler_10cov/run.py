@@ -147,7 +147,7 @@ def row_loss(kind, data, preds):
 
 # ---------------------------------------------------- rieszboost_l2 ---
 # Not the manuscript's protocol: rieszboost with a shifted grid, an L2 penalty
-# on leaf values, and a tuned early-stopping patience. The pilot of the
+# on leaf values, and early-stopping patience 50. The pilot of the
 # manuscript grid chose the largest learning rate and the smallest depth
 # often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree
 # cap. An L2 penalty lambda shrinks a leaf of n augmented rows by 2n/(2n +
@@ -165,8 +165,12 @@ def row_loss(kind, data, preds):
 # for both, so lambda moved up. lambda = 0 and 1 barely differ here, since a
 # leaf's curvature sum 2n is far above 1. Learning rate, depth and patience
 # had interior regret minima or a flat regret surface, so they stayed.
+#
+# Patience is fixed at 50, not tuned, since riesznet's patience is not tuned
+# either. In the pilot's {10, 50, 200}, 50 had the smallest median regret for
+# both estimands. The replay code below still accepts a patience grid.
 L2_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2], max_depth=[1, 2, 3, 5],
-                reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[10, 50, 200])
+                reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[50])
 
 
 def _eta_path(b, Z):
