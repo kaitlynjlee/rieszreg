@@ -82,6 +82,8 @@ On Savio, see the header of `savio.sh`:
 - Pilot (120 replicates): `sbatch --array=0-2 savio.sh`
 - Full run (1000 replicates): `sbatch --array=0-24 savio.sh`
 
+Each (replicate, learner) fit runs in its own Python process, as in `../lee_schuler_10cov`, so a crash in native code loses only that fit. On Savio, xgboost once aborted there with "stack smashing detected", and under a shared worker pool that stopped the whole array task. A crashed fit is retried once. If it crashes again, it's recorded as a failed fit, which `summarize` counts in its `failed` column.
+
 `run.py` writes one cache file per (replicate, learner) to `cache/lee_schuler_10cov_shift/<learner>/`. Each file holds the learner's estimation-set predictions (α at A and at A + δ) and the cross-validated risk of every setting. The cache key covers:
 
 - the learner's source and settings

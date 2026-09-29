@@ -31,6 +31,9 @@ import inspect
 import itertools
 import os
 import shutil
+import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -392,6 +395,13 @@ def cache_path(comp, rep, key):
     return CACHE / comp / f"rep{rep}_{key}.pkl"
 
 
+def _write(path, out):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    pd.to_pickle(out, tmp)
+    tmp.replace(path)                 # atomic: a killed job leaves the previous file in place
+
+
 def run_task(rep, comp, key, overwrite=False):
     path = cache_path(comp, rep, key)
     if path.exists() and not overwrite:
@@ -406,10 +416,7 @@ def run_task(rep, comp, key, overwrite=False):
     except Exception as err:          # a failed fit is recorded as missing, and the run continues
         out = {"preds": None, "record": {"error": repr(err)}}
     out["seconds"] = time.perf_counter() - t0
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    pd.to_pickle(out, tmp)
-    tmp.replace(path)                 # atomic: a killed job leaves the previous file in place
+    _write(path, out)
     if overwrite:                     # drop this pair's files from older code, so one version remains
         for old in (CACHE / comp).glob(f"rep{rep}_*.pkl"):
             if old != path:
@@ -428,8 +435,29 @@ def run(reps, comps, jobs, overwrite=False):
         for t in tasks:
             run_task(*t)
     else:
-        from joblib import Parallel, delayed
-        Parallel(n_jobs=jobs, batch_size=1)(delayed(run_task)(*t) for t in tasks)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(jobs) as pool:
+            list(pool.map(lambda t: _task_process(*t), tasks))
+
+
+def _task_process(rep, comp, key, overwrite):
+    """Fit one (replicate, component) pair in its own Python process. A crash
+    in native code (xgboost aborted once with "stack smashing detected" on
+    Savio) then loses that fit alone instead of every worker in a shared
+    pool. The pair is retried once and, if it crashes again, recorded as a
+    failed fit, which summarize counts in its `failed` column."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), "task", str(rep), comp]
+    if overwrite:
+        cmd.append("--overwrite")
+    for attempt in (1, 2):
+        code = subprocess.run(cmd).returncode
+        if code == 0:
+            return
+        how = f"signal {signal.Signals(-code).name}" if code < 0 else f"exit code {code}"
+        print(f"rep={rep} {comp}: process ended with {how} (attempt {attempt})", flush=True)
+    _write(cache_path(comp, rep, key), {"preds": None, "seconds": float("nan"),
+                                        "record": {"error": f"fit process crashed twice ({how})"}})
+    print(f"done rep={rep} {comp} FAILED (process crashed twice)", flush=True)
 
 
 # ------------------------------------------------------------- summary ---
@@ -667,6 +695,10 @@ if __name__ == "__main__":
     r.add_argument("--overwrite", action="store_true",
                    help="refit and replace cached pairs, deleting their files from older code")
     sub.add_parser("summarize")
+    t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
+    t.add_argument("rep", type=int)
+    t.add_argument("component")
+    t.add_argument("--overwrite", action="store_true")
     sub.add_parser("status", help="cached fits per learner, by cache key")
     k = sub.add_parser("rekey", help="reuse cached fits after a code change verified not to alter them")
     k.add_argument("--components", nargs="+", required=True)
@@ -676,6 +708,8 @@ if __name__ == "__main__":
     if a.cmd == "run":
         lo, hi = (int(v) for v in a.reps.split(":"))
         run(range(lo, hi), a.components or list(COMPONENTS), a.jobs, a.overwrite)
+    elif a.cmd == "task":
+        run_task(a.rep, a.component, cache_key(a.component), a.overwrite)
     elif a.cmd == "rekey":
         rekey(a.components, a.from_key, a.dry_run)
     elif a.cmd == "status":
