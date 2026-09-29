@@ -398,10 +398,11 @@ def estimates():
             continue
         d, _ = data(rep)
         X, A = d[dgp.COV].to_numpy(), d["A"].to_numpy()
+        mu0 = {"mu": dgp.outcome(A, X), "mu1": dgp.outcome(1.0, X), "mu0": dgp.outcome(0.0, X)}
         for e in ESTIMANDS:
             a0 = dgp.true_alpha(e, A, X)
-            for method in ("oracle",) + LEARNERS:
-                if method == "oracle":
+            for method in ("oracle_mu0", "oracle") + LEARNERS:
+                if method.startswith("oracle"):
                     alpha = a0
                 else:
                     got = fits[f"{method}_{e}"].get(rep)
@@ -411,7 +412,10 @@ def estimates():
                         rows.append(dict(rep=rep, estimand=e, method=method, failed=True))
                         continue
                     alpha = got["preds"]["alpha"]
-                est, se = one_step(e, d, mu[rep]["preds"], alpha)
+                # oracle_mu0 also uses the true outcome regression: a check on
+                # the pipeline and on Monte Carlo noise, since with alpha_0 the
+                # one-step estimator is unbiased for any independent mu-hat.
+                est, se = one_step(e, d, mu0 if method == "oracle_mu0" else mu[rep]["preds"], alpha)
                 rows.append(dict(rep=rep, estimand=e, method=method, failed=False, est=est, se=se,
                                  alpha_rmse=float(np.sqrt(np.mean((alpha - a0) ** 2))),
                                  alpha_mae=float(np.mean(np.abs(alpha - a0)))))
