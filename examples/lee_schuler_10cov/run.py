@@ -142,15 +142,120 @@ def row_loss(kind, data, preds):
     return preds["alpha"].to_numpy() ** 2 - 2 * m
 
 
-# name -> (fit function, grid, loss kind, iteration cap). Slowest first, so a
-# parallel run starts the long tasks early.
+# ---------------------------------------------------- rieszboost_l2 ---
+# Not the manuscript's protocol: rieszboost with a shifted grid, an L2 penalty
+# on leaf values, and a tuned early-stopping patience. The pilot of the
+# manuscript grid chose the largest learning rate and the smallest depth
+# often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree
+# cap. An L2 penalty lambda shrinks a leaf of n augmented rows by 2n/(2n +
+# lambda), so it damps the few-row leaves that give extreme alpha-hat where
+# overlap is weak.
+#
+# Patience costs no extra fits: each fit runs at the largest patience, its
+# validation Riesz loss after every tree is computed from per-tree
+# predictions, and early stopping at each smaller patience is replayed on
+# that path. Boosting is sequential with a seeded row subsample, so the first
+# t trees of that fit are the trees a fit stopped at t would have.
+
+L2_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2], max_depth=[1, 2, 3, 5],
+                reg_lambda=[0.0, 1.0, 10.0], patience=[10, 50, 200])
+
+
+def _eta_path(b, Z):
+    """rows x trees: the booster's eta after each tree, from per-tree
+    predictions (each includes the base margin once, recovered from the
+    first two trees)."""
+    import xgboost as xgb
+    booster = b.predictor_.booster
+    d = xgb.DMatrix(np.asarray(b._features(Z), dtype=float))
+    per = np.column_stack([booster.predict(d, iteration_range=(k, k + 1))
+                           for k in range(booster.num_boosted_rounds())]).astype(float)
+    base = per[:, 0] + per[:, 1] - booster.predict(d, iteration_range=(0, 2)).astype(float)
+    return base[:, None] + np.cumsum(per - base[:, None], axis=1)
+
+
+def _alpha_path(b, df):
+    Z = df[["A"] + dgp.COV]
+    return {c: np.asarray(b.loss_.link_to_alpha(_eta_path(b, z)))
+            for c, z in (("alpha", Z), ("alpha1", Z.assign(A=1.0)), ("alpha0", Z.assign(A=0.0)))}
+
+
+def _riesz_rows(kind, df, alpha, alpha1, alpha0):
+    """row_loss for alpha arrays of any trailing shape (rows x trees)."""
+    m = alpha1 - alpha0
+    if kind == "ATT":
+        m = df["A"].to_numpy()[:, None] * m if m.ndim == 2 else df["A"].to_numpy() * m
+    return alpha ** 2 - 2 * m
+
+
+def _stop(path, patience):
+    """Trees kept by early stopping with this patience on a validation-loss path."""
+    best, best_i = np.inf, 0
+    for i, v in enumerate(path):
+        if v < best:
+            best, best_i = v, i
+        elif i - best_i >= patience:
+            break
+    return best_i + 1
+
+
+def _l2_fit(estimand, train, learning_rate, max_depth, reg_lambda):
+    """One fit at the largest patience, on 80% of `train`, stopping on the
+    other 20%; returns the booster and its validation-loss path."""
+    from rieszboost import RieszBooster
+    valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
+    cols = ["A"] + dgp.COV
+    b = RieszBooster(estimand=_estimand(estimand), n_estimators=BOOST["max_iter"], learning_rate=learning_rate,
+                     max_depth=max_depth, reg_lambda=reg_lambda, subsample=BOOST["subsample"],
+                     early_stopping_rounds=max(s["patience"] for s in L2_GRID),
+                     random_state=SEED).fit(train[~valid][cols], eval_set=train[valid][cols])
+    v = train[valid].reset_index(drop=True)
+    path = _riesz_rows(estimand, v, **_alpha_path(b, v)).mean(axis=0)
+    return b, path
+
+
+def rieszboost_l2(estimand):
+    def select(train, test):
+        folds = np.arange(len(train)) * K // len(train)
+        patiences = sorted({s["patience"] for s in L2_GRID})
+        bases = list(dict.fromkeys((s["learning_rate"], s["max_depth"], s["reg_lambda"]) for s in L2_GRID))
+        losses = {str(s): [] for s in L2_GRID}
+        iters = {str(s): [] for s in L2_GRID}
+        replay_ok = []
+        for lr, depth, lam in bases:
+            for k in range(K):
+                val = train[folds == k].reset_index(drop=True)
+                b, path = _l2_fit(estimand, train[folds != k].reset_index(drop=True), lr, depth, lam)
+                replay_ok.append(_stop(path, max(patiences)) == b.best_iteration_ + 1)
+                a = _alpha_path(b, val)
+                for p in patiences:
+                    t = _stop(path, p)
+                    s = str(dict(learning_rate=lr, max_depth=depth, reg_lambda=lam, patience=p))
+                    losses[s].append(_riesz_rows(estimand, val, *(a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0"))))
+                    iters[s].append(t)
+        risk = {s: float(np.concatenate(v).mean()) for s, v in losses.items()}
+        best = L2_GRID[[str(s) for s in L2_GRID].index(min(risk, key=risk.get))]
+        b, path = _l2_fit(estimand, train, best["learning_rate"], best["max_depth"], best["reg_lambda"])
+        t = _stop(path, best["patience"])
+        a = _alpha_path(b, test)
+        preds = pd.DataFrame({c: a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0")})
+        return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": t,
+                       "replay_matches_booster": float(np.mean(replay_ok))}
+    return select
+
+
+# name -> (fit function, grid, loss kind, iteration cap[, selector]). A
+# component with a selector is fit by selector(train, test) instead of
+# cv_select(fit, grid, ...). Slowest first, so a parallel run starts the long
+# tasks early.
 COMPONENTS = {
+    **{f"rieszboost_l2_{e}": (None, L2_GRID, e, BOOST["max_iter"], rieszboost_l2(e)) for e in ESTIMANDS},
     **{f"rieszboost_{e}": (rieszboost(e), XGB_GRID, e, BOOST["max_iter"]) for e in ESTIMANDS},
     "outcome": (outcome_xgb, XGB_GRID, "outcome", BOOST["max_iter"]),
     **{f"riesznet_{e}": (riesznet(e), RIESZNET_GRID, e, NET["max_iter"]) for e in ESTIMANDS},
     **{f"forestriesz_{e}": (forestriesz(e), FOREST_GRID, e, None) for e in ESTIMANDS},
 }
-LEARNERS = ("rieszboost", "riesznet", "forestriesz")
+LEARNERS = ("rieszboost", "rieszboost_l2", "riesznet", "forestriesz")
 
 
 # ----------------------------------------------------------- one task ---
@@ -193,14 +298,16 @@ def cache_key(comp):
     """Everything that determines a component's fit except the replicate: its
     learner source and settings, the data and CV code, the package versions,
     and the source of the rieszreg packages it uses."""
-    fit, grid, kind, cap = COMPONENTS[comp]
-    stem = comp.split("_")[0]
+    fit, grid, kind, cap = COMPONENTS[comp][:4]
+    stem = comp.rsplit("_", 1)[0] if comp.endswith(ESTIMANDS) else comp
     parts = [inspect.getsource(globals()[stem if stem != "outcome" else "outcome_xgb"]),
              repr((grid, kind, cap, BOOST, NET, BASE_SEED, N, K, SEED, VALID_FRAC)),
              inspect.getsource(cv_select), inspect.getsource(row_loss), inspect.getsource(data),
              inspect.getsource(dgp), repr(sorted(_versions().items()))]
-    pkgs = {"rieszboost": ("rieszreg", "rieszboost"), "riesznet": ("rieszreg", "riesznet"),
-            "forestriesz": ("rieszreg", "forestriesz")}.get(stem, ())
+    if stem == "rieszboost_l2":
+        parts += [inspect.getsource(f) for f in (_eta_path, _alpha_path, _riesz_rows, _stop, _l2_fit)]
+    pkgs = {"rieszboost": ("rieszreg", "rieszboost"), "rieszboost_l2": ("rieszreg", "rieszboost"),
+            "riesznet": ("rieszreg", "riesznet"), "forestriesz": ("rieszreg", "forestriesz")}.get(stem, ())
     for pkg in pkgs:
         parts += [p.read_text() for p in sorted((_env.REPO / "packages" / pkg / "python" / pkg).rglob("*.py"))]
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
@@ -214,11 +321,12 @@ def run_task(rep, comp, key, overwrite=False):
     path = cache_path(comp, rep, key)
     if path.exists() and not overwrite:
         return
-    fit, grid, kind, _ = COMPONENTS[comp]
+    fit, grid, kind, _ = COMPONENTS[comp][:4]
+    selector = COMPONENTS[comp][4] if len(COMPONENTS[comp]) > 4 else None
     est, train = data(rep)
     t0 = time.perf_counter()
     try:
-        preds, record = cv_select(fit, grid, kind, train, est)
+        preds, record = selector(train, est) if selector else cv_select(fit, grid, kind, train, est)
         out = {"preds": {c: preds[c].to_numpy() for c in preds}, "record": record}
     except Exception as err:          # a failed fit is recorded as missing, and the run continues
         out = {"preds": None, "record": {"error": repr(err)}}
@@ -335,7 +443,8 @@ def tuning():
     low or high edge of each tuned axis, and the share of refits that reached
     the iteration cap. A consistent edge means the grid should move."""
     lines = []
-    for comp, (_, grid, _, cap) in COMPONENTS.items():
+    for comp, spec in COMPONENTS.items():
+        grid, cap = spec[1], spec[3]
         recs = [g["record"] for g in load(comp).values() if g["preds"] is not None]
         if not recs:
             continue
