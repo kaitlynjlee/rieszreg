@@ -147,7 +147,7 @@ def row_loss(kind, data, preds):
 
 # ---------------------------------------------------- rieszboost_l2 ---
 # Not the manuscript's protocol: rieszboost with a shifted grid, an L2 penalty
-# on leaf values, and early-stopping patience 50. The pilot of the
+# on leaf values, early-stopping patience 50 and subsample 0.8. The pilot of the
 # manuscript grid chose the largest learning rate and the smallest depth
 # often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree
 # cap. An L2 penalty lambda shrinks a leaf of n augmented rows by 2n/(2n +
@@ -171,6 +171,7 @@ def row_loss(kind, data, preds):
 # both estimands. The replay code below still accepts a patience grid.
 L2_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2], max_depth=[1, 2, 3, 5],
                 reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[50])
+L2_SUBSAMPLE = 0.8    # share of individuals drawn per round (the manuscript's rieszboost uses 0.9)
 
 
 def _eta_path(b, Z):
@@ -218,7 +219,7 @@ def _l2_fit(estimand, train, learning_rate, max_depth, reg_lambda):
     valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
     cols = ["A"] + dgp.COV
     b = RieszBooster(estimand=_estimand(estimand), n_estimators=BOOST["max_iter"], learning_rate=learning_rate,
-                     max_depth=max_depth, reg_lambda=reg_lambda, subsample=BOOST["subsample"],
+                     max_depth=max_depth, reg_lambda=reg_lambda, subsample=L2_SUBSAMPLE,
                      early_stopping_rounds=max(s["patience"] for s in L2_GRID),
                      random_state=SEED).fit(train[~valid][cols], eval_set=train[valid][cols])
     v = train[valid].reset_index(drop=True)
@@ -318,6 +319,7 @@ def cache_key(comp):
              inspect.getsource(dgp), repr(sorted(_versions().items()))]
     if stem == "rieszboost_l2":
         parts += [inspect.getsource(f) for f in (_eta_path, _alpha_path, _riesz_rows, _stop, _l2_fit)]
+        parts.append(repr(L2_SUBSAMPLE))
     pkgs = {"rieszboost": ("rieszreg", "rieszboost"), "rieszboost_l2": ("rieszreg", "rieszboost"),
             "riesznet": ("rieszreg", "riesznet"), "forestriesz": ("rieszreg", "forestriesz")}.get(stem, ())
     for pkg in pkgs:
