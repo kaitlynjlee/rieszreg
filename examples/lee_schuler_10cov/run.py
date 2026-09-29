@@ -342,7 +342,29 @@ def tuning():
         if cap:
             its = np.array([r["iters"] for r in recs])
             lines.append(f"  refit iterations: median {int(np.median(its))}, share at cap {np.mean(its >= cap):.2f}")
+            if "learning_rate" in grid[0] and np.any(its >= cap):
+                lr = np.array([r["best"]["learning_rate"] for r in recs])
+                by = ", ".join(f"{v:g}: {np.mean(its[lr == v] >= cap):.2f}" for v in sorted(set(lr)))
+                lines.append(f"  share of refits at cap, by selected learning rate: {by}")
+        lines.append(regret(recs, grid))
     return "\n".join(lines)
+
+
+def regret(recs, grid):
+    """Median regret of each setting: its CV risk minus the smallest CV risk
+    in the same replicate, taken over replicates. When the risk surface is
+    flat, selection frequencies put settings on an edge by chance; the setting
+    with the smallest median regret is the one the edge rule should check."""
+    risk = pd.DataFrame([r["cv_risk"] for r in recs])
+    reg = risk.sub(risk.min(axis=1), axis=0).median().sort_values()
+    best = grid[[str(s) for s in grid].index(reg.index[0])]
+    edges = [f"{axis} at {'lowest' if best[axis] == min(v) else 'highest'}"
+             for axis in best for v in [[s[axis] for s in grid]]
+             if len(set(v)) > 1 and best[axis] in (min(v), max(v))]
+    out = ["  median regret (CV risk above the replicate's best), smallest five:"]
+    out += [f"    {k}: {v:.4f}" for k, v in reg.head(5).items()]
+    out.append(f"  smallest median regret: {reg.index[0]} -> " + ("; ".join(edges) + " (on the edge)" if edges else "interior"))
+    return "\n".join(out)
 
 
 def cache_status():
