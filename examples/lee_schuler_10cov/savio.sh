@@ -3,6 +3,7 @@
 # REPS_PER_TASK replicates and runs every (replicate, learner) pair in it, one
 # single-threaded process per core. Tasks resume: a pair whose cache file
 # exists is skipped, so resubmitting the same array fills only the gaps.
+# With OVERWRITE=1, every pair is refit and its cache file replaced instead.
 #
 # One-time setup, on a Savio login node (as in examples/simulation/savio_run.ipynb):
 #   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -16,6 +17,7 @@
 #
 # Pilot (reps 0-119):  sbatch --array=0-2  savio.sh
 # Full (reps 0-999):   sbatch --array=0-24 savio.sh
+# Redo:                OVERWRITE=1 sbatch --array=0-2 savio.sh   (refits and replaces those reps)
 # Then, on a login node (the results are on scratch, not in this folder):
 #   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim uv run python run.py summarize
 #
@@ -40,4 +42,4 @@ export PYTHONUNBUFFERED=1
 cd "$HOME/rieszreg/examples/lee_schuler_10cov"
 mkdir -p logs
 echo "array task $SLURM_ARRAY_TASK_ID: reps $LO to $((HI - 1)) on $SLURM_CPUS_PER_TASK cores"
-uv run python -u run.py run --reps "$LO:$HI" --jobs "$SLURM_CPUS_PER_TASK"
+uv run python -u run.py run --reps "$LO:$HI" --jobs "$SLURM_CPUS_PER_TASK" ${OVERWRITE:+--overwrite}

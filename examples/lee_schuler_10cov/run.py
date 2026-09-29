@@ -210,9 +210,9 @@ def cache_path(comp, rep, key):
     return CACHE / comp / f"rep{rep}_{key}.pkl"
 
 
-def run_task(rep, comp, key):
+def run_task(rep, comp, key, overwrite=False):
     path = cache_path(comp, rep, key)
-    if path.exists():
+    if path.exists() and not overwrite:
         return
     fit, grid, kind, _ = COMPONENTS[comp]
     est, train = data(rep)
@@ -226,14 +226,21 @@ def run_task(rep, comp, key):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     pd.to_pickle(out, tmp)
-    tmp.replace(path)
+    tmp.replace(path)                 # atomic: a killed job leaves the previous file in place
+    if overwrite:                     # drop this pair's files from older code, so one version remains
+        for old in (CACHE / comp).glob(f"rep{rep}_*.pkl"):
+            if old != path:
+                old.unlink()
     print(f"done rep={rep} {comp} {out['seconds']:.0f}s{' FAILED' if out['preds'] is None else ''}", flush=True)
 
 
-def run(reps, comps, jobs):
+def run(reps, comps, jobs, overwrite=False):
+    """Fit every (replicate, component) pair not yet cached under the current
+    key. With overwrite, refit every pair and replace its cache file."""
     keys = {c: cache_key(c) for c in comps}
-    tasks = [(r, c, keys[c]) for c in comps for r in reps if not cache_path(c, r, keys[c]).exists()]
-    print(f"{len(tasks)} tasks to run", flush=True)
+    tasks = [(r, c, keys[c], overwrite) for c in comps for r in reps
+             if overwrite or not cache_path(c, r, keys[c]).exists()]
+    print(f"{len(tasks)} tasks to run{' (overwriting)' if overwrite else ''}", flush=True)
     if jobs == 1:
         for t in tasks:
             run_task(*t)
@@ -416,10 +423,12 @@ if __name__ == "__main__":
     r.add_argument("--reps", default="0:2", help="half-open range: 0:100 runs replicates 0 to 99")
     r.add_argument("--components", nargs="*", default=None, help=f"default: all of {list(COMPONENTS)}")
     r.add_argument("--jobs", type=int, default=1)
+    r.add_argument("--overwrite", action="store_true",
+                   help="refit and replace cached pairs, deleting their files from older code")
     sub.add_parser("summarize")
     a = ap.parse_args()
     if a.cmd == "run":
         lo, hi = (int(v) for v in a.reps.split(":"))
-        run(range(lo, hi), a.components or list(COMPONENTS), a.jobs)
+        run(range(lo, hi), a.components or list(COMPONENTS), a.jobs, a.overwrite)
     else:
         summarize()
