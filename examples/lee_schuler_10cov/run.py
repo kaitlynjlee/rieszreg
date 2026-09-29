@@ -169,7 +169,13 @@ def row_loss(kind, data, preds):
 # Patience is fixed at 50, not tuned, since riesznet's patience is not tuned
 # either. In the pilot's {10, 50, 200}, 50 had the smallest median regret for
 # both estimands. The replay code below still accepts a patience grid.
-L2_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2], max_depth=[1, 2, 3, 5],
+#
+# The learning rate moved up one step from {1e-3, 3e-3, 1e-2, 3e-2}: the
+# pilot's regret surface was flat along it (top settings within 0.01), 1e-3
+# accounted for most of the compute and every refit at the tree cap, and the
+# ATE chose 3e-2, the top, 43% of the time. Larger lambda shrinks every leaf,
+# which acts like a smaller learning rate, so 0.1 pairs with lambda 30-100.
+L2_GRID = _grid(learning_rate=[3e-3, 1e-2, 3e-2, 1e-1], max_depth=[1, 2, 3, 5],
                 reg_lambda=[3.0, 10.0, 30.0, 100.0], patience=[50])
 L2_SUBSAMPLE = 0.8    # share of individuals drawn per round (the manuscript's rieszboost uses 0.9)
 
@@ -242,14 +248,15 @@ def rieszboost_l2(estimand):
                 replay_ok.append(_stop(path, max(patiences)) == b.best_iteration_ + 1)
                 a = _alpha_path(b, val)
                 for p in patiences:
-                    t = _stop(path, p)
+                    # at the fit's own patience, xgboost's stop; smaller ones are replayed
+                    t = b.best_iteration_ + 1 if p == max(patiences) else _stop(path, p)
                     s = str(dict(learning_rate=lr, max_depth=depth, reg_lambda=lam, patience=p))
                     losses[s].append(_riesz_rows(estimand, val, *(a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0"))))
                     iters[s].append(t)
         risk = {s: float(np.concatenate(v).mean()) for s, v in losses.items()}
         best = L2_GRID[[str(s) for s in L2_GRID].index(min(risk, key=risk.get))]
         b, path = _l2_fit(estimand, train, best["learning_rate"], best["max_depth"], best["reg_lambda"])
-        t = _stop(path, best["patience"])
+        t = b.best_iteration_ + 1 if best["patience"] == max(patiences) else _stop(path, best["patience"])
         a = _alpha_path(b, test)
         preds = pd.DataFrame({c: a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0")})
         return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": t,
