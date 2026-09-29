@@ -42,6 +42,8 @@ ForestRiesz is not in the manuscript.
 - **What the L2 penalty does:** it shrinks a leaf of n augmented rows by 2n / (2n + λ), which damps the few-row leaves that produce extreme α̂ where overlap is weak.
 - **Patience grids cost no extra fits:** the code still accepts a patience grid. Each fit runs at the largest patience, and early stopping at the smaller ones is replayed on its per-tree validation-loss path, which equals a fresh fit at that patience. `replay_matches_booster` in each record checks the replay at the largest patience against the booster's own stopping point.
 
+`outcome_shifted` is a trial outcome regression, not the manuscript's: the same XGBoost model tuned over learning rate {1e-3, 3e-3, 1e-2, 3e-2, 1e-1} × depth {1, 2, 3, 5}. The pilot's manuscript grid had its smallest median regret at learning rate 1e-2 (the top) and depth 3 (the bottom). The default `outcome` is unchanged. `summarize --outcome outcome_shifted` computes every method's estimates with the trial model, and `--reps 0:80` restricts a summary to the replicates that have it, so the two can be compared on the same datasets. Every summary also prints each outcome model's RMSE for μ̂ vs μ₀ and for τ̂ vs τ₀.
+
 To add it to replicates that are already cached, fit only this learner:
 
 ```sh
