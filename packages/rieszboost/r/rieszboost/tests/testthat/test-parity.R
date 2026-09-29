@@ -124,3 +124,15 @@ test_that("R and Python predictions are bitwise-identical on the same data", {
   py_preds <- as.numeric(booster$py$predict(py_df))
   expect_equal(r_preds, py_preds, tolerance = 1e-10)
 })
+
+
+test_that("XGBoostBackend() takes the tree settings RieszBooster forwards", {
+  s <- simulate(500L, seed = 4L)
+  settings <- list(n_estimators = 40L, max_depth = 2L, reg_lambda = 0, subsample = 0.7)
+  via_booster <- do.call(RieszBooster$new, c(list(estimand = ATE("a", "x")), settings))
+  via_backend <- RieszBooster$new(
+    estimand = ATE("a", "x"),
+    backend = do.call(XGBoostBackend, c(settings, list(n_jobs = 1L)))
+  )
+  expect_equal(via_backend$fit(s$df)$predict(s$df), via_booster$fit(s$df)$predict(s$df))
+})

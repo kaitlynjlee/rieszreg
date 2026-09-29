@@ -44,25 +44,17 @@ class XGBoostPredictor:
     def predict_alpha(self, features: np.ndarray) -> np.ndarray:
         return np.asarray(self.loss.link_to_alpha(self.predict_eta(features)))
 
-    def _booster_n_trees(self) -> int:
+    @property
+    def n_trees(self) -> int:
+        """Trees fitted, including any past the best early-stopping round."""
         return int(self.booster.num_boosted_rounds())
 
     def predict_eta_path(
         self, features: np.ndarray, n_estimators_grid: Sequence[int]
     ) -> np.ndarray:
-        grid = [int(k) for k in n_estimators_grid]
-        if not grid:
-            raise ValueError("n_estimators_grid must be non-empty.")
-        cap = self._booster_n_trees()
-        for k in grid:
-            if k <= 0 or k > cap:
-                raise ValueError(
-                    f"n_estimators_grid entries must satisfy 1 ≤ k ≤ {cap} "
-                    f"(booster has {cap} trees); got {grid}."
-                )
         dmat = xgb.DMatrix(np.asarray(features, dtype=float))
-        out = np.empty((dmat.num_row(), len(grid)), dtype=float)
-        for j, k in enumerate(grid):
+        out = np.empty((dmat.num_row(), len(n_estimators_grid)), dtype=float)
+        for j, k in enumerate(n_estimators_grid):
             out[:, j] = self.booster.predict(dmat, iteration_range=(0, k))
         return out
 
@@ -73,7 +65,7 @@ class XGBoostPredictor:
         return np.asarray(self.loss.link_to_alpha(eta))
 
     def save(self, dir_path):
-        """Save booster as JSON (xgboost native format) inside dir_path."""
+        """Save the booster in xgboost's native UBJSON format inside dir_path."""
         from pathlib import Path
         dir_path = Path(dir_path)
         dir_path.mkdir(parents=True, exist_ok=True)
@@ -151,6 +143,8 @@ class XGBoostBackend:
 
     ``subsample`` is the fraction of individuals (original rows) drawn each
     round. An individual's augmented rows are kept or dropped together.
+
+    ``n_jobs`` is the number of xgboost threads; ``None`` uses all cores.
     """
 
     n_estimators: int = 200
@@ -162,6 +156,7 @@ class XGBoostBackend:
     validation_fraction: float = 0.0
     hessian_floor: float | str = "auto"
     gradient_only: bool = False
+    n_jobs: int | None = None
 
     def fit_augmented(
         self,
@@ -186,6 +181,8 @@ class XGBoostBackend:
             "max_depth": self.max_depth,
             "reg_lambda": self.reg_lambda,
         }
+        if self.n_jobs is not None:
+            params["nthread"] = self.n_jobs
 
         # The held-out metric only drives early stopping; without it, skip the
         # per-round evaluation entirely.

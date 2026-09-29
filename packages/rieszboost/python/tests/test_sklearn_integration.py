@@ -83,3 +83,14 @@ def test_get_set_params_round_trip():
     booster.set_params(n_estimators=200, learning_rate=0.1)
     assert booster.n_estimators == 200
     assert booster.learning_rate == 0.1
+
+
+def test_n_jobs_sets_threads_without_changing_the_fit():
+    import json
+
+    df, _ = _simulate_df(500, seed=3)
+    one = RieszBooster(estimand=rieszboost.ATE(), n_estimators=30, n_jobs=1).fit(df)
+    every = RieszBooster(estimand=rieszboost.ATE(), n_estimators=30).fit(df)
+    config = json.loads(one.predictor_.booster.save_config())
+    assert config["learner"]["generic_param"]["nthread"] == "1"
+    np.testing.assert_array_equal(one.predict(df), every.predict(df))
