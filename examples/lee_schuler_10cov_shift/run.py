@@ -495,13 +495,14 @@ def one_step(estimand, d, mu, alpha):
     return float(est), float(phi.std(ddof=1) / np.sqrt(len(y)))
 
 
-def estimates():
-    """One row per (replicate, estimand, method)."""
+def estimates(reps=None):
+    """One row per (replicate, estimand, method); `reps` restricts the
+    replicates."""
     mu = load("outcome")
     fits = {c: load(c) for c in COMPONENTS if c != "outcome"}
     rows = []
     for rep in sorted(mu):
-        if mu[rep]["preds"] is None:
+        if mu[rep]["preds"] is None or (reps is not None and rep not in reps):
             continue
         d, _ = data(rep)
         X, A = d[dgp.COV].to_numpy(), d["A"].to_numpy()
@@ -549,12 +550,15 @@ def table(df):
     return pd.DataFrame(rows)
 
 
-def tuning():
-    """Per component, the settings CV selected, the share of selections on the
-    low or high edge of each tuned axis, and the share of refits that reached
-    the iteration cap. A consistent edge means the grid should move."""
+def tuning(comps=None):
+    """Per component (default: all), the settings CV selected, the share of
+    selections on the low or high edge of each tuned axis, and the share of
+    refits that reached the iteration cap. A consistent edge means the grid
+    should move."""
     lines = []
     for comp, spec in COMPONENTS.items():
+        if comps is not None and comp not in comps:
+            continue
         grid, cap = spec[1], spec[3]
         recs = [g["record"] for g in load(comp).values() if g["preds"] is not None]
         if not recs:
@@ -614,8 +618,38 @@ def cache_status():
     return "\n".join(lines)
 
 
-def summarize():
-    df = estimates()
+def outcome_error(reps=None):
+    """RMSE of mu-hat against mu_0 at the observed (A, X), and of
+    tau-hat = mu-hat(A + delta, X) - mu-hat(A, X) against tau_0, on the
+    estimation set, averaged over replicates with its MCSE."""
+    rows = []
+    for rep, g in sorted(load("outcome").items()):
+        if g["preds"] is None or (reps is not None and rep not in reps):
+            continue
+        d, _ = data(rep)
+        X, A, m = d[dgp.COV].to_numpy(), d["A"].to_numpy(), g["preds"]
+        mu0 = dgp.outcome(A, X)
+        tau0 = dgp.outcome(A + dgp.DELTA, X) - mu0
+        rows.append((np.sqrt(np.mean((m["mu"] - mu0) ** 2)),
+                     np.sqrt(np.mean((m["mu_shift"] - m["mu"] - tau0) ** 2))))
+    if not rows:
+        return "outcome: no fits"
+    a = np.array(rows)
+    se = a.std(axis=0, ddof=1) / np.sqrt(len(a))
+    return (f"outcome ({len(a)} replicates): RMSE of mu-hat vs mu_0 {a[:, 0].mean():.3f} (MCSE {se[0]:.3f}), "
+            f"of tau-hat vs tau_0 {a[:, 1].mean():.3f} (MCSE {se[1]:.3f})")
+
+
+METHODS = ("oracle_mu0", "oracle") + LEARNERS
+
+
+def summarize(reps=None, estimands=None, methods=None):
+    """Tables, the manuscript's numbers and tuning checks. `estimands` and
+    `methods` (default: all) restrict every part of the output to those rows
+    and those learners' tuning blocks; the outcome regression's block stays."""
+    df = estimates(reps)
+    if not df.empty:
+        df = df[df.estimand.isin(estimands or ESTIMANDS) & df.method.isin(methods or METHODS)]
     if df.empty:
         print("No results to summarize. What the cache holds:")
         print(cache_status())
@@ -623,17 +657,32 @@ def summarize():
               "checkout and environment; rerun, or summarize with the environment that wrote them.")
         return
     RESULTS.mkdir(parents=True, exist_ok=True)
-    df.to_csv(RESULTS / "estimates.csv", index=False)
+    tag = ""
+    if reps is not None:
+        tag += f"_reps{min(reps)}-{max(reps)}"
+    if estimands:
+        tag += "_" + "-".join(estimands)
+    if methods:
+        tag += "_" + "-".join(methods)
+    df.to_csv(RESULTS / f"estimates{tag}.csv", index=False)
     t = table(df)
-    t.to_csv(RESULTS / "table.csv", index=False)
+    t.to_csv(RESULTS / f"table{tag}.csv", index=False)
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 30)
+    if reps is not None:
+        print(f"Replicates {min(reps)} to {max(reps)}")
+    print("Outcome regression: " + outcome_error(reps))
     print("Representer accuracy (manuscript Table 3) and one-step estimator (Table 4), with MCSEs:")
     print(t.round(3).to_string(index=False))
-    paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()])
-    print("\nThe manuscript, for reference:")
-    print(paper.to_string(index=False))
-    print(tuning())
+    # The manuscript's rieszboost isn't a method here, so its rows show unless
+    # --methods leaves them out.
+    paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()
+                          if e in (estimands or ESTIMANDS) and (methods is None or m in methods)])
+    if not paper.empty:
+        print("\nThe manuscript, for reference:")
+        print(paper.to_string(index=False))
+    learners = [m for m in (methods or METHODS) if m in LEARNERS]
+    print(tuning(["outcome"] + [f"{m}_{e}" for m in learners for e in (estimands or ESTIMANDS)]))
 
 
 def status():
@@ -694,7 +743,12 @@ if __name__ == "__main__":
     r.add_argument("--jobs", type=int, default=1)
     r.add_argument("--overwrite", action="store_true",
                    help="refit and replace cached pairs, deleting their files from older code")
-    sub.add_parser("summarize")
+    sm = sub.add_parser("summarize")
+    sm.add_argument("--reps", default=None, help="half-open range, e.g. 0:80; default: all")
+    sm.add_argument("--estimands", nargs="+", choices=list(ESTIMANDS), default=None,
+                    help="default: both")
+    sm.add_argument("--methods", nargs="+", default=None, choices=list(METHODS),
+                    help="default: all")
     t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
     t.add_argument("rep", type=int)
     t.add_argument("component")
@@ -715,4 +769,5 @@ if __name__ == "__main__":
     elif a.cmd == "status":
         status()
     else:
-        summarize()
+        reps = None if a.reps is None else set(range(*(int(v) for v in a.reps.split(":"))))
+        summarize(reps, a.estimands, a.methods)
