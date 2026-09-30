@@ -508,12 +508,15 @@ def table(df):
     return pd.DataFrame(rows)
 
 
-def tuning():
-    """Per component, the settings CV selected, the share of selections on the
-    low or high edge of each tuned axis, and the share of refits that reached
-    the iteration cap. A consistent edge means the grid should move."""
+def tuning(comps=None):
+    """Per component (default: all), the settings CV selected, the share of
+    selections on the low or high edge of each tuned axis, and the share of
+    refits that reached the iteration cap. A consistent edge means the grid
+    should move."""
     lines = []
     for comp, spec in COMPONENTS.items():
+        if comps is not None and comp not in comps:
+            continue
         grid, cap = spec[1], spec[3]
         recs = [g["record"] for g in load(comp).values() if g["preds"] is not None]
         if not recs:
@@ -594,8 +597,16 @@ def outcome_error(outcome="outcome", reps=None):
             f"of tau-hat vs tau_0 {a[:, 1].mean():.3f} (MCSE {se[1]:.3f})")
 
 
-def summarize(outcome="outcome", reps=None):
+METHODS = ("oracle_mu0", "oracle") + LEARNERS
+
+
+def summarize(outcome="outcome", reps=None, estimands=None, methods=None):
+    """Tables, the manuscript's numbers and tuning checks. `estimands` and
+    `methods` (default: all) restrict every part of the output to those rows
+    and those learners' tuning blocks; the outcome regression's block stays."""
     df = estimates(outcome, reps)
+    if not df.empty:
+        df = df[df.estimand.isin(estimands or ESTIMANDS) & df.method.isin(methods or METHODS)]
     if df.empty:
         print("No results to summarize. What the cache holds:")
         print(cache_status())
@@ -606,6 +617,10 @@ def summarize(outcome="outcome", reps=None):
     tag = "" if outcome == "outcome" else f"_{outcome}"
     if reps is not None:
         tag += f"_reps{min(reps)}-{max(reps)}"
+    if estimands:
+        tag += "_" + "-".join(estimands)
+    if methods:
+        tag += "_" + "-".join(methods)
     df.to_csv(RESULTS / f"estimates{tag}.csv", index=False)
     t = table(df)
     t.to_csv(RESULTS / f"table{tag}.csv", index=False)
@@ -616,10 +631,13 @@ def summarize(outcome="outcome", reps=None):
         print("  " + outcome_error(o, reps))
     print("Representer accuracy (manuscript Table 1) and one-step estimator (Table 2), with MCSEs:")
     print(t.round(3).to_string(index=False))
-    paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()])
-    print("\nThe manuscript, for reference:")
-    print(paper.to_string(index=False))
-    print(tuning())
+    paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()
+                          if e in (estimands or ESTIMANDS) and m in (methods or METHODS)])
+    if not paper.empty:
+        print("\nThe manuscript, for reference:")
+        print(paper.to_string(index=False))
+    learners = [m for m in (methods or METHODS) if m in LEARNERS]
+    print(tuning([outcome] + [f"{m}_{e}" for m in learners for e in (estimands or ESTIMANDS)]))
 
 
 def status():
@@ -684,6 +702,10 @@ if __name__ == "__main__":
     sm.add_argument("--outcome", default="outcome", choices=["outcome", "outcome_shifted"],
                     help="the outcome regression every method's estimate uses")
     sm.add_argument("--reps", default=None, help="half-open range, e.g. 0:80; default: all")
+    sm.add_argument("--estimands", nargs="+", choices=list(ESTIMANDS), default=None,
+                    help="default: both")
+    sm.add_argument("--methods", nargs="+", default=None, choices=["oracle_mu0", "oracle", *LEARNERS],
+                    help="default: all")
     t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
     t.add_argument("rep", type=int)
     t.add_argument("component")
@@ -705,4 +727,4 @@ if __name__ == "__main__":
         status()
     else:
         reps = None if a.reps is None else set(range(*(int(v) for v in a.reps.split(":"))))
-        summarize(a.outcome, reps)
+        summarize(a.outcome, reps, a.estimands, a.methods)
