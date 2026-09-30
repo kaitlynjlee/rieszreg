@@ -13,6 +13,7 @@ from typing import Sequence
 
 import numpy as np
 import xgboost as xgb
+from sklearn.base import BaseEstimator
 
 from rieszreg.augmentation import AugmentedDataset
 from rieszreg.backends.base import FitResult, register_predictor_loader
@@ -125,12 +126,15 @@ def _make_metric(aug_valid: AugmentedDataset, loss: Loss):
     return metric
 
 
-@dataclass
-class XGBoostBackend:
+@dataclass(repr=False)
+class XGBoostBackend(BaseEstimator):
     """Default backend. Construct with the boosting-loop knobs (n_estimators,
     learning_rate, early_stopping_rounds), the xgboost tree params
     (max_depth, reg_lambda, subsample) and stability tweaks (hessian_floor,
     gradient_only).
+
+    Has sklearn's ``get_params`` / ``set_params``, so ``GridSearchCV`` can
+    tune any field through ``backend__<field>`` on the estimator.
 
     ``hessian_floor`` is the lower bound on each row's Hessian. Counterfactual
     rows have a true Hessian of 0, so without a floor xgboost's Newton leaf
