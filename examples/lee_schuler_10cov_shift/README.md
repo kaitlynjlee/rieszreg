@@ -84,6 +84,15 @@ On Savio, see the header of `savio.sh`:
 
 Each (replicate, learner) fit runs in its own Python process, as in `../lee_schuler_10cov`, so a crash in native code loses only that fit. On Savio, xgboost once aborted there with "stack smashing detected", and under a shared worker pool that stopped the whole array task. A crashed fit is retried once. If it crashes again, it's recorded as a failed fit, which `summarize` counts in its `failed` column.
 
+`summarize` takes filters that restrict the tables and tuning blocks, as in `../lee_schuler_10cov`. For example, the LASE only, for three methods, on replicates 0–499:
+
+```sh
+uv run python run.py summarize --reps 0:500 --estimands LASE \
+    --methods oracle rieszboost_l2 forestriesz
+```
+
+Every summary also prints the outcome regression's RMSE for μ̂ against μ₀ and for τ̂ = μ̂(A + δ, X) − μ̂(A, X) against τ₀. The outcome regression is the manuscript's: `../lee_schuler_10cov` tried a shifted outcome grid, and it wasn't better.
+
 `run.py` writes one cache file per (replicate, learner) to `cache/lee_schuler_10cov_shift/<learner>/`. Each file holds the learner's estimation-set predictions (α at A and at A + δ) and the cross-validated risk of every setting. The cache key covers:
 
 - the learner's source and settings
