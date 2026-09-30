@@ -27,8 +27,11 @@ This follows the manuscript's Section 3.3 and Appendix C.2.3.
 |---|---|---|
 | outcome (XGBoost) | patience 200, cap 20000 trees, subsample 0.9, 20% early-stopping split | learning rate {1e-5, 1e-4, 1e-3, 1e-2} × depth {3, 5, 7} |
 | rieszboost | the same, with no L2 penalty on leaves | the same grid |
+| propensity (XGBoost classifier, for `indirect`) | the outcome regression's fixed settings; tuned on log loss | the outcome regression's grid |
 | riesznet | 3 hidden layers of 200, ELU, Adam, weight decay 1e-3, batch 64, patience 10, cap 1000 epochs | learning rate {1e-5, 1e-4, 1e-3, 1e-2, 1e-1} |
 | ForestRiesz | the published ForestRiesz settings (package defaults) | minimum leaf size {5, 10, 20, 50, 100} |
+
+`indirect` plugs the propensity score π̂ into the representer's known form, a/π̂ − (1 − a)/(1 − π̂) for the ATE and a − (1 − a)π̂/(1 − π̂) for the ATT, without clipping, as in the manuscript's Indirect rows. The authors' code tuned π̂ on accuracy (GridSearchCV's default), and this one tunes it on log loss.
 
 ForestRiesz is not in the manuscript.
 
