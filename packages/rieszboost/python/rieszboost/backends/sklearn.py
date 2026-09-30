@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
+from sklearn.base import BaseEstimator
 
 from rieszreg.augmentation import AugmentedDataset
 from rieszreg.backends.base import FitResult, register_predictor_loader
@@ -119,12 +120,13 @@ def _line_search(
     return num / denom
 
 
-@dataclass
-class SklearnBackend:
+@dataclass(repr=False)
+class SklearnBackend(BaseEstimator):
     """Friedman gradient boosting backend. `base_learner_factory()` is a
     zero-arg callable returning a fresh sklearn-compatible regressor. Base
     learners that expose an unset ``random_state`` are seeded from the
-    estimator's ``random_state``."""
+    estimator's ``random_state``. Has sklearn's ``get_params`` /
+    ``set_params``, so ``GridSearchCV`` can tune ``backend__<field>``."""
 
     base_learner_factory: Callable[[], Any]
     n_estimators: int = 200
