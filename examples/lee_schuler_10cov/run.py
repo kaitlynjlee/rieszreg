@@ -279,6 +279,50 @@ def rieszboost_l2(estimand):
     return select
 
 
+# ------------------------------------------------------- propensity ---
+# The indirect representer of the manuscript's "Indirect" rows: a propensity
+# score from an XGBoost classifier, plugged into alpha's known form. Same grid
+# and fixed settings as the outcome regression, selected by 5-fold CV on log
+# loss (the authors' code used GridSearchCV's default score, accuracy). pi-hat
+# is not clipped, as in the manuscript. One fit per replicate serves both
+# estimands.
+
+def propensity_xgb(train, test, learning_rate, max_depth):
+    import xgboost as xgb
+    valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
+    fit_part, val = train[~valid], train[valid]
+    m = xgb.XGBClassifier(n_estimators=BOOST["max_iter"], learning_rate=learning_rate, max_depth=max_depth,
+                          subsample=BOOST["subsample"], early_stopping_rounds=BOOST["patience"],
+                          n_jobs=1, random_state=SEED)
+    m.fit(fit_part[dgp.COV], fit_part["A"], eval_set=[(val[dgp.COV], val["A"])], verbose=False)
+    return pd.DataFrame({"pi": m.predict_proba(test[dgp.COV])[:, 1]}), m.best_iteration + 1
+
+
+def _log_loss_rows(a, pi):
+    pi = np.clip(pi, 1e-12, 1 - 1e-12)      # only so a held-out 0 or 1 cannot give log(0)
+    return -(a * np.log(pi) + (1 - a) * np.log(1 - pi))
+
+
+def propensity(train, test):
+    folds = np.arange(len(train)) * K // len(train)
+    risk, iters = {}, {}
+    for s in XGB_GRID:
+        losses, its = [], []
+        for k in range(K):
+            val = train[folds == k].reset_index(drop=True)
+            p, it = propensity_xgb(train[folds != k], val, **s)
+            losses.append(_log_loss_rows(val["A"].to_numpy(), p["pi"].to_numpy()))
+            its.append(it)
+        risk[str(s)], iters[str(s)] = float(np.concatenate(losses).mean()), its
+    best = XGB_GRID[[str(s) for s in XGB_GRID].index(min(risk, key=risk.get))]
+    preds, it = propensity_xgb(train, test, **best)
+    return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": it}
+
+
+def indirect_alpha(estimand, a, pi):
+    return a / pi - (1 - a) / (1 - pi) if estimand == "ATE" else a - (1 - a) * pi / (1 - pi)
+
+
 # name -> (fit function, grid, loss kind, iteration cap[, selector]). A
 # component with a selector is fit by selector(train, test) instead of
 # cv_select(fit, grid, ...). Slowest first, so a parallel run starts the long
@@ -288,6 +332,7 @@ COMPONENTS = {
     **{f"rieszboost_{e}": (rieszboost(e), XGB_GRID, e, BOOST["max_iter"]) for e in ESTIMANDS},
     "outcome": (outcome_xgb, XGB_GRID, "outcome", BOOST["max_iter"]),
     "outcome_shifted": (outcome_xgb, OUTCOME_SHIFTED_GRID, "outcome", BOOST["max_iter"]),
+    "propensity": (None, XGB_GRID, "propensity", BOOST["max_iter"], propensity),
     **{f"riesznet_{e}": (riesznet(e), RIESZNET_GRID, e, NET["max_iter"]) for e in ESTIMANDS},
     **{f"forestriesz_{e}": (forestriesz(e), FOREST_GRID, e, None) for e in ESTIMANDS},
 }
@@ -343,6 +388,8 @@ def cache_key(comp):
     if stem == "rieszboost_l2":
         parts += [inspect.getsource(f) for f in (_eta_path, _alpha_path, _riesz_rows, _stop, _l2_fit)]
         parts.append(repr(L2_SUBSAMPLE))
+    if stem == "propensity":
+        parts += [inspect.getsource(f) for f in (propensity_xgb, _log_loss_rows)]
     pkgs = {"rieszboost": ("rieszreg", "rieszboost"), "rieszboost_l2": ("rieszreg", "rieszboost"),
             "riesznet": ("rieszreg", "riesznet"), "forestriesz": ("rieszreg", "forestriesz")}.get(stem, ())
     for pkg in pkgs:
@@ -429,6 +476,8 @@ PAPER = {
     ("ATE", "riesznet"): dict(alpha_rmse=0.989, alpha_mae=2.489, pct_bias=-0.854, rmse=0.253, coverage=0.905),
     ("ATT", "rieszboost"): dict(alpha_rmse=0.675, alpha_mae=0.303, pct_bias=0.582, rmse=0.259, coverage=0.936),
     ("ATT", "riesznet"): dict(alpha_rmse=3.194, alpha_mae=1.610, pct_bias=0.253, rmse=0.283, coverage=0.952),
+    ("ATE", "indirect"): dict(alpha_rmse=0.895, alpha_mae=0.532, pct_bias=0.237, rmse=0.237, coverage=0.946),
+    ("ATT", "indirect"): dict(alpha_rmse=0.709, alpha_mae=0.300, pct_bias=0.405, rmse=0.273, coverage=0.943),
 }
 
 
@@ -457,7 +506,8 @@ def estimates(outcome="outcome", reps=None):
     """One row per (replicate, estimand, method), every method using the
     outcome regression `outcome`; `reps` restricts the replicates."""
     mu = load(outcome)
-    fits = {c: load(c) for c in COMPONENTS if c not in OUTCOMES}
+    fits = {c: load(c) for c in COMPONENTS if c not in OUTCOMES + ("propensity",)}
+    prop = load("propensity")
     rows = []
     for rep in sorted(mu):
         if mu[rep]["preds"] is None or (reps is not None and rep not in reps):
@@ -467,17 +517,18 @@ def estimates(outcome="outcome", reps=None):
         mu0 = {"mu": dgp.outcome(A, X), "mu1": dgp.outcome(1.0, X), "mu0": dgp.outcome(0.0, X)}
         for e in ESTIMANDS:
             a0 = dgp.true_alpha(e, A, X)
-            for method in ("oracle_mu0", "oracle") + LEARNERS:
+            for method in ("oracle_mu0", "oracle", "indirect") + LEARNERS:
                 if method.startswith("oracle"):
                     alpha = a0
                 else:
-                    got = fits[f"{method}_{e}"].get(rep)
+                    got = prop.get(rep) if method == "indirect" else fits[f"{method}_{e}"].get(rep)
                     if got is None:
                         continue
                     if got["preds"] is None:
                         rows.append(dict(rep=rep, estimand=e, method=method, failed=True))
                         continue
-                    alpha = got["preds"]["alpha"]
+                    alpha = (indirect_alpha(e, A, got["preds"]["pi"]) if method == "indirect"
+                             else got["preds"]["alpha"])
                 # oracle_mu0 also uses the true outcome regression: a check on
                 # the pipeline and on Monte Carlo noise, since with alpha_0 the
                 # one-step estimator is unbiased for any independent mu-hat.
@@ -597,7 +648,7 @@ def outcome_error(outcome="outcome", reps=None):
             f"of tau-hat vs tau_0 {a[:, 1].mean():.3f} (MCSE {se[1]:.3f})")
 
 
-METHODS = ("oracle_mu0", "oracle") + LEARNERS
+METHODS = ("oracle_mu0", "oracle", "indirect") + LEARNERS
 
 
 def summarize(outcome="outcome", reps=None, estimands=None, methods=None):
@@ -637,7 +688,8 @@ def summarize(outcome="outcome", reps=None, estimands=None, methods=None):
         print("\nThe manuscript, for reference:")
         print(paper.to_string(index=False))
     learners = [m for m in (methods or METHODS) if m in LEARNERS]
-    print(tuning([outcome] + [f"{m}_{e}" for m in learners for e in (estimands or ESTIMANDS)]))
+    extra = ["propensity"] if "indirect" in (methods or METHODS) else []
+    print(tuning([outcome] + extra + [f"{m}_{e}" for m in learners for e in (estimands or ESTIMANDS)]))
 
 
 def status():
@@ -704,7 +756,7 @@ if __name__ == "__main__":
     sm.add_argument("--reps", default=None, help="half-open range, e.g. 0:80; default: all")
     sm.add_argument("--estimands", nargs="+", choices=list(ESTIMANDS), default=None,
                     help="default: both")
-    sm.add_argument("--methods", nargs="+", default=None, choices=["oracle_mu0", "oracle", *LEARNERS],
+    sm.add_argument("--methods", nargs="+", default=None, choices=["oracle_mu0", "oracle", "indirect", *LEARNERS],
                     help="default: all")
     t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
     t.add_argument("rep", type=int)
