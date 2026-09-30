@@ -24,6 +24,16 @@ With `BernoulliLoss` the `"auto"` steps are large, so a fit converges in far few
 
 `max_depth`, `reg_lambda`, `subsample`, `learning_rate`, `n_estimators`, `early_stopping_rounds`, `validation_fraction` and `n_jobs` are `XGBoostBackend` fields; `RieszBooster` forwards its constructor args of the same names when it builds the backend.
 
+Both backends have sklearn's `get_params` and `set_params`. In Python, `GridSearchCV` tunes any backend field through `backend__<field>`. This reaches `hessian_floor` and `gradient_only`, which `RieszBooster` does not take directly:
+
+```python
+GridSearchCV(
+    RieszBooster(estimand=ATE(), backend=XGBoostBackend(n_estimators=300)),
+    param_grid={"backend__hessian_floor": ["auto", 2.0], "backend__max_depth": [3, 4]},
+    cv=5,
+)
+```
+
 ## Tuning recipe
 
 | Knob | Default | When to change | Effect |

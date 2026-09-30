@@ -90,6 +90,18 @@ alpha_hat = best.predict(df)
 
 Score is negative held-out Riesz loss — higher is better, as sklearn expects.
 
+To tune a setting that lives only on the backend, pass the backend and name the field as `backend__<field>`. Both `XGBoostBackend` and `SklearnBackend` support this:
+
+```python
+from rieszboost import XGBoostBackend
+
+grid = GridSearchCV(
+    RieszBooster(estimand=ATE(), backend=XGBoostBackend(n_estimators=300)),
+    param_grid={"backend__hessian_floor": ["auto", 2.0], "backend__max_depth": [3, 4]},
+    cv=5,
+).fit(df)
+```
+
 ## Cross-fitting for downstream inference
 
 When plugging α̂ into a TMLE / one-step / DML estimator, use cross-fitting so predictions are out-of-fold. `cross_val_predict` does it for any sklearn estimator:
