@@ -146,6 +146,9 @@ class XGBoostBackend(BaseEstimator):
     ``subsample`` is the fraction of individuals (original rows) drawn each
     round. An individual's augmented rows are kept or dropped together.
 
+    ``validation_fraction`` is the share of rows held out for early stopping.
+    Rows are held out only when ``early_stopping_rounds`` is set.
+
     ``n_jobs`` is the number of xgboost threads; ``None`` uses all cores.
     """
 
@@ -155,10 +158,14 @@ class XGBoostBackend(BaseEstimator):
     reg_lambda: float = 1.0
     subsample: float = 1.0
     early_stopping_rounds: int | None = None
-    validation_fraction: float = 0.0
+    validation_fraction: float = 0.1
     hessian_floor: float | str = "auto"
     gradient_only: bool = False
     n_jobs: int | None = None
+
+    def holdout_fraction(self) -> float:
+        """Rows to hold out: ``validation_fraction`` under early stopping, else 0."""
+        return self.validation_fraction if self.early_stopping_rounds is not None else 0.0
 
     def fit_augmented(
         self,
