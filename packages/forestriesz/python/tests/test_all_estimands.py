@@ -11,15 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from forestriesz import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    ForestRieszRegressor,
-    LocalShift,
-    TSM,
-    default_riesz_features,
-)
+from forestriesz import ATE, ATT, AdditiveShift, ForestRieszRegressor, LocalShift, TSM
+from forestriesz.feature_fns import default_riesz_features
 
 
 @pytest.fixture

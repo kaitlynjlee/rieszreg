@@ -5,7 +5,7 @@ import pandas as pd
 
 import rieszboost
 from rieszboost import RieszBooster
-from rieszboost.tracer import trace
+from rieszreg.estimands.tracer import trace
 
 
 def test_att_traces_to_zero_for_controls():

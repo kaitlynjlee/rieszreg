@@ -10,7 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from forestriesz import ATE, ForestRieszRegressor, default_riesz_features
+from forestriesz import ATE, ForestRieszRegressor
+from forestriesz.feature_fns import default_riesz_features
 
 
 def test_sieve_recovers_ipw_signs(linear_gaussian_ate_df):
@@ -55,7 +56,7 @@ def test_sieve_works_for_tsm(logistic_tsm_df):
 
 
 def test_split_features_default_drops_treatment_for_ate():
-    from forestriesz import default_split_feature_indices
+    from forestriesz.feature_fns import default_split_feature_indices
 
     idx = default_split_feature_indices(ATE(covariates=["x"]), default_riesz_features(ATE()))
     # ATE feature_keys = ('a', 'x'); with treatment-indexed sieve, splitter sees only 'x'.
@@ -63,7 +64,7 @@ def test_split_features_default_drops_treatment_for_ate():
 
 
 def test_split_features_default_uses_all_when_no_sieve():
-    from forestriesz import default_split_feature_indices
+    from forestriesz.feature_fns import default_split_feature_indices
 
     idx = default_split_feature_indices(ATE(covariates=["x"]), None)
     assert idx == (0, 1)

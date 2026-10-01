@@ -5,7 +5,8 @@ from __future__ import annotations
 import numpy as np
 
 import forestriesz
-from forestriesz import ForestPredictor, ForestRieszBackend
+from forestriesz import ForestRieszBackend
+from forestriesz.predictor import ForestPredictor
 
 
 def test_backend_exposes_fit_rows_only():
@@ -30,21 +31,8 @@ def test_predictor_loader_registered():
     )
 
 
-def test_namespace_exports_match_design():
-    expected = {
-        "ATE",
-        "ATT",
-        "AdditiveShift",
-        "ForestDiagnostics",
-        "ForestPredictor",
-        "ForestRieszBackend",
-        "ForestRieszRegressor",
-        "LocalShift",
-        "Loss",
-        "SquaredLoss",
-        "TSM",
-        "default_riesz_features",
-        "default_split_feature_indices",
-        "diagnose_forest",
-    }
-    assert expected.issubset(set(forestriesz.__all__))
+def test_namespace_reexports_shared_user_api():
+    from rieszreg import user_api
+
+    assert set(user_api.__all__) <= set(forestriesz.__all__)
+    assert {"ForestRieszRegressor", "AugForestRieszRegressor"} <= set(forestriesz.__all__)

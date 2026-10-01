@@ -117,7 +117,7 @@ def test_pms_with_categorical_falls_back_silently():
         max_depth=4, splitter="hist",
         categorical_features=(0,),
     ).fit(df)
-    assert n_leaves(est.predictor_.tree) >= 2
+    assert est.get_n_leaves() >= 2
     assert np.isfinite(est.predict(df)).all()
 
 
@@ -129,4 +129,4 @@ def test_pms_grows_non_trivial_tree_at_depth():
         estimand=_ate(6), max_depth=10, splitter="hist", random_state=0,
         min_samples_split=2, min_samples_leaf=1,
     ).fit(df)
-    assert n_leaves(est.predictor_.tree) >= 8
+    assert est.get_n_leaves() >= 8

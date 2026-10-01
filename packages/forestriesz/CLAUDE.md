@@ -11,7 +11,7 @@ This package depends on `rieszreg` for the shared abstractions (`Estimand`, `Los
 - `AugForestRieszRegressor` — convenience subclass of `rieszreg.RieszEstimator` with sklearn `RandomForestRegressor`-style hyperparameters (`n_estimators`, `max_depth`, `min_samples_leaf`, `min_samples_split`, `max_features`, `bootstrap`, `max_samples`, `n_jobs`, `splitter`, `max_bins`, `categorical_features`, ...).
 - `ForestRieszBackend` — `MomentBackend.fit_rows` Protocol implementation. Computes per-row moments via `rieszreg.trace` and packs them into EconML's linear-moment GRF.
 - `ForestRieszRegressor` — convenience subclass of `rieszreg.RieszEstimator` with forest-specific hyperparameters (`n_estimators`, `max_depth`, `min_samples_leaf`, `honest`, `inference`, `l2`, `riesz_feature_fns`, ...) on the constructor.
-- `default_riesz_features(estimand)` — defaults for the moment-style backend's `riesz_feature_fns` for built-in estimands (treatment indicators).
+- `forestriesz.feature_fns.default_riesz_features(estimand)` — defaults for the moment-style backend's `riesz_feature_fns` for built-in estimands (treatment indicators).
 - `predict_interval(X, alpha)` — honest-split confidence intervals on the moment-style backend for the locally constant / single-basis case.
 - R6 wrapper subclassing `rieszreg::RieszEstimatorR6` (moment-style only).
 

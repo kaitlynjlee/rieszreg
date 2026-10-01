@@ -5,7 +5,7 @@ import pandas as pd
 
 import rieszboost
 from rieszboost import RieszBooster
-from rieszboost.tracer import trace
+from rieszreg.estimands.tracer import trace
 
 
 def test_local_shift_traces_below_threshold():

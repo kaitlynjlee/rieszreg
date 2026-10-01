@@ -6,7 +6,7 @@ title: "Diagnostics"
 
 You don't observe $\alpha_0$ on real data, so the held-out Riesz loss from cross-validation (`cross_val_score`, or whatever validation signal a backend exposes during fit) is the only training-time signal. After fitting, `.diagnose()` reports magnitude statistics and warnings about extreme tail values, near-positivity violations, and single-point extrapolation. Those warnings often matter more for downstream variance than the bulk fit quality.
 
-`.diagnose()` is defined in `rieszreg.diagnostics` and works for any `RieszEstimator` subclass. Backend-specific extensions (e.g. `KernelDiagnostics` adds chosen λ, support size, effective d.o.f., and the kernel matrix's condition number) layer on top of the shared base.
+`.diagnose(Z)` works on every learner. Some learners add their own fields on top of the shared ones: `KernelRieszRegressor` reports the chosen λ, support size, effective degrees of freedom, and condition number. `RieszTreeRegressor` and `ForestRieszRegressor` report leaf counts, leaf sizes, and feature importances.
 
 This page walks through `.diagnose()` on an under-tuned booster (so the warnings fire) and maps each warning to the hyperparameter that fixes it. See [Boosting backend](backends/boosting.qmd) and [Kernel backend](backends/kernel.qmd) for the backend-specific tuning recipes.
 

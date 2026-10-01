@@ -1,51 +1,29 @@
 """rieszboost: gradient boosting for Riesz representers.
 
-Public API: a sklearn-compatible `RieszBooster` estimator with swappable
-estimand / loss / backend objects baked in at construction.
+`RieszBooster` is a sklearn-style estimator. Tell it what to estimate
+(the estimand), fit it on the treatment + covariate columns, and predict
+the Riesz representer α̂ for each row:
 
-    from rieszboost import RieszBooster, ATE, SquaredLoss
-    booster = RieszBooster(estimand=ATE(), n_estimators=200, learning_rate=0.05)
-    booster.fit(Z)
+    from rieszboost import RieszBooster, ATE
+    booster = RieszBooster(estimand=ATE(treatment="treated"))
+    booster.fit(Z)                 # Z: treatment column + covariates
     alpha_hat = booster.predict(Z)
+
+Every estimand, loss and diagnostic from `rieszreg` is re-exported here.
 """
 
-from .augmentation import AugmentedDataset
-from .diagnostics import Diagnostics, diagnose
-from .estimand import (
-    ATE,
-    ATT,
-    AdditiveShift,
-    Estimand,
-    LocalShift,
-    TSM,
-)
-from .losses import BernoulliLoss, BoundedSquaredLoss, KLLoss, Loss, SquaredLoss
-from .tracer import LinearForm, Tracer, trace
+from rieszreg.user_api import *  # noqa: F401,F403
+from rieszreg.user_api import __all__ as _shared
+from rieszreg.backends import register_predictor_loader as _register
 
-__all__ = [
-    "ATE",
-    "ATT",
-    "AdditiveShift",
-    "AugmentedDataset",
-    "BernoulliLoss",
-    "BoundedSquaredLoss",
-    "Diagnostics",
-    "Estimand",
-    "KLLoss",
-    "LinearForm",
-    "LocalShift",
-    "Loss",
-    "RieszBooster",
-    "SklearnBackend",
-    "SquaredLoss",
-    "TSM",
-    "Tracer",
-    "XGBoostBackend",
-    "diagnose",
-    "trace",
-]
+# So `RieszEstimator.load` works after `import rieszboost` alone.
+_register("xgboost", "rieszboost.backends.xgboost:XGBoostPredictor.load")
+_register("sklearn", "rieszboost.backends.sklearn:SklearnPredictor.load")
+
+__all__ = [*_shared, "RieszBooster", "XGBoostBackend", "SklearnBackend"]
 
 
+# xgboost loads lazily, so `import rieszboost` stays cheap.
 _LAZY = {
     "RieszBooster": ("estimator", "RieszBooster"),
     "XGBoostBackend": ("backends", "XGBoostBackend"),

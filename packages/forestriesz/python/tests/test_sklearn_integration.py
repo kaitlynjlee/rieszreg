@@ -6,7 +6,8 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import GridSearchCV, cross_val_predict, KFold
 
-from forestriesz import ATE, ForestRieszRegressor, default_riesz_features, TSM
+from forestriesz import ATE, ForestRieszRegressor, TSM
+from forestriesz.feature_fns import default_riesz_features
 
 
 def test_clone_preserves_constructor_args():

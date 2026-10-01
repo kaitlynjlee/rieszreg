@@ -11,7 +11,8 @@ import pytest
 
 from rieszreg.testing import dgps
 
-from forestriesz import ATE, ForestRieszRegressor, default_riesz_features
+from forestriesz import ATE, ForestRieszRegressor
+from forestriesz.feature_fns import default_riesz_features
 
 
 def _fit_predict(train, test):

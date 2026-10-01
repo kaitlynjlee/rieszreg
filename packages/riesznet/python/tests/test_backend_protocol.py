@@ -36,28 +36,28 @@ def test_predictor_loader_registered():
     )
 
 
-def test_namespace_exports_match_design():
-    expected = {
-        "RieszNet",
-        "TorchBackend",
-        "TorchPredictor",
-        "ATE",
-        "ATT",
-        "AdditiveShift",
-        "BernoulliLoss",
-        "BoundedSquaredLoss",
-        "Diagnostics",
-        "Estimand",
-        "KLLoss",
-        "LinearForm",
-        "LocalShift",
-        "Loss",
-        "SquaredLoss",
-        "TSM",
-        "Tracer",
-        "trace",
-    }
-    assert expected.issubset(set(riesznet.__all__))
+def test_namespace_reexports_shared_user_api():
+    from rieszreg import user_api
+
+    assert set(user_api.__all__) <= set(riesznet.__all__)
+    assert {"RieszNet", "TorchBackend"} <= set(riesznet.__all__)
+
+
+def test_load_works_after_plain_import(tmp_path, linear_gaussian_ate_df):
+    """A saved RieszNet reloads via RieszEstimator.load in a fresh process
+    that has only run `import riesznet` (torch not yet imported)."""
+    import subprocess
+    import sys
+
+    est = riesznet.RieszNet(estimand=riesznet.ATE(), epochs=2, hidden_sizes=(4,))
+    est.fit(linear_gaussian_ate_df)
+    est.save(tmp_path / "m")
+    code = (
+        "import riesznet, sys; from rieszreg import RieszEstimator; "
+        "assert 'torch' not in sys.modules; "
+        f"RieszEstimator.load({str(tmp_path / 'm')!r})"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_rieszreg_orchestrator_dispatches_to_fit_rows(linear_gaussian_ate_df):

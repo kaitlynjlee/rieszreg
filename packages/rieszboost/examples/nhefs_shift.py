@@ -140,7 +140,7 @@ def main():
     print("# Fitting α̂ via 5-fold cross_val_predict (rieszboost)")
     alpha_hat = fit_alpha_oof(df)
 
-    from rieszboost.diagnostics import diagnose
+    from rieszboost import diagnose
     print(diagnose(alpha_hat).summary())
 
     psi, se = eee_shift(df, mu_full, mu_oof, alpha_hat)

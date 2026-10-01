@@ -51,17 +51,7 @@ def diagnose_tree(estimator, Z, **kwargs) -> TreeDiagnostics:
             fi = feature_importance(tree, n_features)
 
     return TreeDiagnostics(
-        n=base.n,
-        rms=base.rms,
-        mean=base.mean,
-        min=base.min,
-        max=base.max,
-        abs_quantiles=base.abs_quantiles,
-        n_extreme=base.n_extreme,
-        extreme_fraction=base.extreme_fraction,
-        extreme_threshold=base.extreme_threshold,
-        riesz_loss=base.riesz_loss,
-        warnings=base.warnings,
+        **vars(base),
         n_leaves=nl,
         max_depth_actual=md,
         mean_leaf_size=mls,

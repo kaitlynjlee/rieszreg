@@ -6,7 +6,7 @@ import pytest
 
 import rieszboost
 from rieszboost import RieszBooster
-from rieszboost.losses import KLLoss, SquaredLoss
+from rieszreg.losses import KLLoss, SquaredLoss
 
 
 def _logit(z):
@@ -72,7 +72,7 @@ def test_kl_riesz_loss_finite():
 
 
 def test_bernoulli_predicts_in_zero_one():
-    from rieszboost.losses import BernoulliLoss
+    from rieszreg.losses import BernoulliLoss
     df, _ = _simulate_df(500, seed=0)
     # For TSM, m̄ = 1, which under Bernoulli sits on the upper boundary; the
     # loss-minimizing constant init clips to (1-ε) and saturates the sigmoid.
@@ -89,7 +89,7 @@ def test_bernoulli_predicts_in_zero_one():
 
 
 def test_bounded_squared_predicts_in_range():
-    from rieszboost.losses import BoundedSquaredLoss
+    from rieszreg.losses import BoundedSquaredLoss
     df, _ = _simulate_df(800, seed=2)
     lo, hi = -8.0, 8.0
     booster = RieszBooster(
@@ -109,7 +109,7 @@ def test_bounded_squared_correlates_with_truth():
     Note: very generous bounds make the sigmoid link saturate over most of η,
     which slows the boosting dynamics — pick bounds that closely fit α₀.
     """
-    from rieszboost.losses import BoundedSquaredLoss
+    from rieszreg.losses import BoundedSquaredLoss
     df, pi = _simulate_df(2000, seed=3)
     a = df["a"].values
     alpha_true = a / pi - (1 - a) / (1 - pi)
@@ -124,13 +124,13 @@ def test_bounded_squared_correlates_with_truth():
 
 
 def test_bounded_squared_init_validation():
-    from rieszboost.losses import BoundedSquaredLoss
+    from rieszreg.losses import BoundedSquaredLoss
     with pytest.raises(ValueError, match="lo"):
         BoundedSquaredLoss(lo=2.0, hi=1.0)
 
 
 def test_bernoulli_serialization_round_trip(tmp_path):
-    from rieszboost.losses import BernoulliLoss
+    from rieszreg.losses import BernoulliLoss
     df, _ = _simulate_df(300, seed=4)
     b = RieszBooster(
         estimand=rieszboost.TSM(level=1),
@@ -145,7 +145,7 @@ def test_bernoulli_serialization_round_trip(tmp_path):
 
 
 def test_bounded_squared_serialization_round_trip(tmp_path):
-    from rieszboost.losses import BoundedSquaredLoss
+    from rieszreg.losses import BoundedSquaredLoss
     df, _ = _simulate_df(300, seed=5)
     b = RieszBooster(
         estimand=rieszboost.ATE(),

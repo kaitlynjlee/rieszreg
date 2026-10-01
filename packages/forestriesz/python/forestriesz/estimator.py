@@ -140,6 +140,12 @@ class ForestRieszRegressor(RieszEstimator):
             verbose=self.verbose,
         )
 
+    def diagnose(self, Z, **kwargs):
+        """Base diagnostics plus forest extras: feature importances, mean
+        leaf size and mean number of leaves per tree."""
+        from .diagnostics import diagnose_forest
+        return diagnose_forest(self, Z, **kwargs)
+
     # ---- inference passthroughs ----
 
     def predict_interval(

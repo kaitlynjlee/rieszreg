@@ -196,9 +196,7 @@ loaded = ForestRieszRegressor.load("path/to/dir", riesz_feature_fns=my_basis)
 ## Diagnostics
 
 ```python
-from forestriesz import diagnose_forest
-
-diagnose_forest(fr, df).summary()
+fr.diagnose(df).summary()
 # -> RMS magnitude, alpha quantiles, extreme-value warnings,
 #    feature_importances, mean leaf size, mean leaf count per tree.
 ```

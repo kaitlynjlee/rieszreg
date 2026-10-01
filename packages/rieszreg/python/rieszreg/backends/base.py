@@ -130,13 +130,15 @@ _PREDICTOR_LOADERS: dict[str, Any] = {}
 
 
 def register_predictor_loader(kind: str, loader) -> None:
-    """Register a loader callable for a predictor kind.
+    """Register a loader for a predictor kind.
 
-    Implementation packages call this at import time:
+    ``loader`` is a callable ``(dir_path, base_score, loss, best_iteration)
+    -> Predictor``, or a ``"module:attr"`` string naming one. Packages with
+    heavy lazily-imported dependencies register the string from their
+    ``__init__`` so ``RieszEstimator.load`` works after a plain
+    ``import <pkg>`` without importing the dependency up front:
 
-        register_predictor_loader("xgboost", XGBoostPredictor.load)
-
-    The loader signature is `(dir_path, base_score, loss, best_iteration) -> Predictor`.
+        register_predictor_loader("riesznet", "riesznet.backend:TorchPredictor.load")
     """
     _PREDICTOR_LOADERS[kind] = loader
 
@@ -146,10 +148,18 @@ def load_predictor(kind: str, dir_path, *, base_score, loss, best_iteration):
     if kind not in _PREDICTOR_LOADERS:
         raise ValueError(
             f"No loader registered for predictor kind {kind!r}. "
-            f"Import a learner package (e.g. `import rieszboost`, `import krrr`, "
-            f"`import forestriesz`, `import riesznet`) "
-            f"before calling .load(...). Registered kinds: {sorted(_PREDICTOR_LOADERS)}."
+            f"Import the learner package that fit this model (e.g. `import "
+            f"rieszboost`) before calling .load(...). Registered kinds: "
+            f"{sorted(_PREDICTOR_LOADERS)}."
         )
-    return _PREDICTOR_LOADERS[kind](
+    loader = _PREDICTOR_LOADERS[kind]
+    if isinstance(loader, str):
+        from importlib import import_module
+        mod_name, attr = loader.split(":")
+        obj = import_module(mod_name)
+        for part in attr.split("."):
+            obj = getattr(obj, part)
+        loader = obj
+    return loader(
         dir_path, base_score=base_score, loss=loss, best_iteration=best_iteration
     )

@@ -149,7 +149,7 @@ Two growth policies are supported:
 - **Leafwise** (`growth_policy="leafwise"`). Best-first growth: at each step split the leaf whose best candidate has the highest gain anywhere in the tree. Termination on `max_leaf_nodes` (the natural cap for this policy) or when no positive-gain split remains.
 
 ```{python}
-from riesztree import RieszTreeRegressor, ATE, n_leaves
+from riesztree import RieszTreeRegressor, ATE
 
 est_dw = RieszTreeRegressor(
     estimand=ATE(treatment="a", covariates=("x",)),
@@ -161,8 +161,8 @@ est_lw = RieszTreeRegressor(
     growth_policy="leafwise", max_leaf_nodes=16, max_depth=20,
 ).fit(df)
 
-print(f"depthwise leaves: {n_leaves(est_dw.predictor_.tree)}")
-print(f"leafwise  leaves: {n_leaves(est_lw.predictor_.tree)}")
+print(f"depthwise leaves: {est_dw.get_n_leaves()}")
+print(f"leafwise  leaves: {est_lw.get_n_leaves()}")
 ```
 
 ## Pruning {#sec-pruning}
@@ -185,9 +185,9 @@ est_es = RieszTreeRegressor(
     max_depth=10, early_stopping_rounds=3, validation_fraction=0.2,
 ).fit(df)
 
-print(f"unpruned: {n_leaves(RieszTreeRegressor(estimand=ATE(treatment='a', covariates=('x',)), max_depth=10).fit(df).predictor_.tree)} leaves")
-print(f"pruned  : {n_leaves(est_pruned.predictor_.tree)} leaves")
-print(f"early-stop: {n_leaves(est_es.predictor_.tree)} leaves")
+print(f"unpruned: {RieszTreeRegressor(estimand=ATE(treatment='a', covariates=('x',)), max_depth=10).fit(df).get_n_leaves()} leaves")
+print(f"pruned  : {est_pruned.get_n_leaves()} leaves")
+print(f"early-stop: {est_es.get_n_leaves()} leaves")
 ```
 
 ## Categorical predictors {#sec-categorical}
@@ -275,7 +275,7 @@ The v0.0.1 names `max_leaves` and `pruning_alpha` are accepted as deprecated ali
 ```{python}
 # Compare splitter modes on the same data — predictions and timings.
 import time
-from riesztree import RieszTreeRegressor, ATE, n_leaves
+from riesztree import RieszTreeRegressor, ATE
 
 estimand = ATE(treatment="a", covariates=("x",))
 
@@ -283,7 +283,7 @@ for sp in ["exact", "hist", "random"]:
     t0 = time.perf_counter()
     est = RieszTreeRegressor(estimand=estimand, max_depth=4, splitter=sp).fit(df)
     fit_ms = (time.perf_counter() - t0) * 1000
-    print(f"splitter={sp:6s}  fit={fit_ms:6.1f} ms  leaves={n_leaves(est.predictor_.tree)}")
+    print(f"splitter={sp:6s}  fit={fit_ms:6.1f} ms  leaves={est.get_n_leaves()}")
 ```
 
 - `"exact"` (default): per-feature linear scan over distinct values. Best partition; same byte-for-byte as the legacy Python splitter on the four built-in losses.

@@ -14,12 +14,7 @@ import pytest
 
 from rieszreg.testing import dgps
 
-from forestriesz import (
-    AdditiveShift,
-    AugForestRieszRegressor,
-    ATE,
-    TSM,
-)
+from forestriesz import AdditiveShift, AugForestRieszRegressor, ATE, TSM
 
 
 def _fit_predict_factory(estimand):

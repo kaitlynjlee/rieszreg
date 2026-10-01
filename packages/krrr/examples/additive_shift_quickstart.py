@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from krrr import AdditiveShift, Gaussian, KernelRieszRegressor, diagnose_kernel
+from krrr import AdditiveShift, Gaussian, KernelRieszRegressor
 
 
 def main() -> None:
@@ -38,7 +38,7 @@ def main() -> None:
     print(f"alpha_hat range     : [{alpha_hat.min():.3f}, {alpha_hat.max():.3f}]")
     print(f"alpha_hat mean      : {alpha_hat.mean():.3f}  (≈ d/dδ E[α(a+δ,x)] at δ=0)")
     print()
-    print(diagnose_kernel(krr, df).summary())
+    print(krr.diagnose(df).summary())
 
 
 if __name__ == "__main__":

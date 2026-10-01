@@ -182,7 +182,7 @@ The R6 wrapper exposes the same method with column names `"lambda=1e-03"`, etc.
 print(krr.diagnose(df).summary())
 ```
 
-The base `Diagnostics` (RMS magnitude, |α| quantiles, extreme-row count, held-out Riesz loss) is shared via rieszreg. Use `krrr.diagnose_kernel(krr, df)` for KRR-specific extras: chosen λ, support size, effective degrees of freedom, condition number of the kernel system.
+The base `Diagnostics` (RMS magnitude, |α| quantiles, extreme-row count, held-out Riesz loss) is shared via rieszreg. `krr.diagnose(df)` adds KRR-specific extras: chosen λ, support size, effective degrees of freedom, condition number of the kernel system.
 
 ## Save and load
 

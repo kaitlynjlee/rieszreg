@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from riesztree import ATE, RieszTreeRegressor, n_leaves
+from riesztree import ATE, RieszTreeRegressor
 from riesztree.grow import _resolve_max_features
 
 
@@ -99,8 +99,8 @@ def test_max_features_different_seeds_differ():
     b_est = RieszTreeRegressor(estimand=estimand, max_depth=5, max_features=5, random_state=11).fit(df)
     # Sanity: both fits must actually grow, otherwise the test isn't measuring
     # what it claims.
-    assert n_leaves(a_est.predictor_.tree) > 1
-    assert n_leaves(b_est.predictor_.tree) > 1
+    assert a_est.get_n_leaves() > 1
+    assert b_est.get_n_leaves() > 1
     assert not np.allclose(a_est.predict(df), b_est.predict(df))
 
 
@@ -114,7 +114,7 @@ def test_min_impurity_decrease_blocks_low_gain_splits():
     huge = RieszTreeRegressor(
         estimand=estimand, max_depth=8, min_impurity_decrease=1e9
     ).fit(df)
-    assert n_leaves(huge.predictor_.tree) == 1
+    assert huge.get_n_leaves() == 1
 
 
 def test_min_impurity_decrease_zero_default_grows_tree():
@@ -123,7 +123,7 @@ def test_min_impurity_decrease_zero_default_grows_tree():
     grown = RieszTreeRegressor(
         estimand=estimand, max_depth=4, min_impurity_decrease=0.0
     ).fit(df)
-    assert n_leaves(grown.predictor_.tree) > 1
+    assert grown.get_n_leaves() > 1
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ def test_min_weight_fraction_leaf_caps_tree_size():
         min_samples_leaf=1,
         min_weight_fraction_leaf=0.4,
     ).fit(df)
-    assert n_leaves(constrained.predictor_.tree) <= 2
+    assert constrained.get_n_leaves() <= 2
 
 
 def test_min_weight_fraction_leaf_zero_is_identity():

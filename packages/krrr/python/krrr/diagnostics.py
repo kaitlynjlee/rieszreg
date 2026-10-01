@@ -1,8 +1,8 @@
 """KRR-specific diagnostics extending `rieszreg.diagnose`.
 
-`diagnose_kernel(regressor, Z)` returns the base `Diagnostics` fields from
-rieszreg plus kernel-specific extras: chosen λ, condition number of the
-o-block kernel matrix, and an effective-degrees-of-freedom estimate.
+`KernelRieszRegressor.diagnose(Z)` returns the base `Diagnostics` fields
+plus kernel-specific extras: chosen λ, condition number of the o-block
+kernel matrix, and an effective-degrees-of-freedom estimate.
 """
 
 from __future__ import annotations
@@ -13,21 +13,19 @@ import numpy as np
 
 from rieszreg.diagnostics import Diagnostics, diagnose
 
-from .estimator import KernelRieszRegressor
 from .solvers import SolveResult
 
 
 @dataclass
-class KernelDiagnostics:
-    base: Diagnostics
-    lambda_selected: float | None
-    n_support: int | None
-    effective_dof: float | None
-    condition_number: float | None
+class KernelDiagnostics(Diagnostics):
+    lambda_selected: float | None = None
+    n_support: int | None = None
+    effective_dof: float | None = None
+    condition_number: float | None = None
     extra_warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        lines = [self.base.summary(), "Kernel diagnostics:"]
+        lines = [super().summary(), "Kernel diagnostics:"]
         if self.lambda_selected is not None:
             lines.append(f"  λ (selected)       : {self.lambda_selected:.4g}")
         if self.n_support is not None:
@@ -46,7 +44,7 @@ def _effective_dof(eigvals: np.ndarray, n_lam: float) -> float:
     return float(np.sum(eigvals / (eigvals + n_lam)))
 
 
-def diagnose_kernel(regressor: KernelRieszRegressor, Z) -> KernelDiagnostics:
+def diagnose_kernel(regressor, Z, **kwargs) -> KernelDiagnostics:
     """Full-fat diagnostics including λ, effective d.o.f. and condition number.
 
     Effective d.o.f. and condition number are computed from the training-time
@@ -54,7 +52,7 @@ def diagnose_kernel(regressor: KernelRieszRegressor, Z) -> KernelDiagnostics:
     eigendecomposition. For solvers other than "direct" (which already has
     the spectrum), the diagnostic skips these fields.
     """
-    base = diagnose(estimator=regressor, Z=Z)
+    base = diagnose(estimator=regressor, Z=Z, **kwargs)
 
     result: SolveResult = regressor.predictor_.result
     lambda_selected = result.extra.get("lambda") if result.extra else None
@@ -97,7 +95,7 @@ def diagnose_kernel(regressor: KernelRieszRegressor, Z) -> KernelDiagnostics:
                 extra_warnings.append(f"could not compute spectrum: {e}")
 
     return KernelDiagnostics(
-        base=base,
+        **vars(base),
         lambda_selected=lambda_selected,
         n_support=n_support,
         effective_dof=eff_dof,

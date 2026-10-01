@@ -18,11 +18,7 @@ from rieszreg import (
 )
 from rieszreg.testing import dgps
 
-from forestriesz import (
-    AugForestRieszRegressor,
-    ATE,
-    TSM,
-)
+from forestriesz import AugForestRieszRegressor, ATE, TSM
 
 
 # ---- end-to-end: predictions stay in the loss's natural domain ------------
