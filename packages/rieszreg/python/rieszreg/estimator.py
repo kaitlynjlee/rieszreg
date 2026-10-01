@@ -11,6 +11,7 @@ Composes with `sklearn.model_selection.GridSearchCV`, `cross_val_predict`,
 
 from __future__ import annotations
 
+import warnings
 from typing import Sequence
 
 import numpy as np
@@ -132,6 +133,28 @@ def _features_from_rows(rows: Sequence[dict], estimand: Estimand) -> np.ndarray:
     return np.asarray(
         [[row[k] for k in estimand.feature_keys] for row in rows], dtype=float
     )
+
+
+def _check_outcome_not_covariate(estimand, feats: np.ndarray, ys) -> None:
+    """With ``covariates=None`` every non-treatment column is a covariate,
+    including an outcome column left in Z, which biases α̂."""
+    for j, key in enumerate(estimand.feature_keys):
+        if key == getattr(estimand, "treatment", None):
+            continue
+        if ys is not None and np.array_equal(feats[:, j], ys):
+            raise ValueError(
+                f"Column {key!r} is the outcome y, but {estimand.name} is using it "
+                "as a covariate (covariates=None uses every non-treatment column). "
+                f"Drop it from Z or pass covariates=[...] to {estimand.name}."
+            )
+        if key.lower() in ("y", "outcome"):
+            warnings.warn(
+                f"{estimand.name} is using column {key!r} as a covariate "
+                "(covariates=None uses every non-treatment column). If it is the "
+                f"outcome, drop it from Z or pass covariates=[...] to {estimand.name}.",
+                UserWarning,
+                stacklevel=3,
+            )
 
 
 def _split_Z(Z, y, validation_fraction: float, random_state: int):
@@ -292,6 +315,8 @@ class RieszEstimator(BaseEstimator):
         feats_train = _features_from_Z(Z_train, estimand)
         n_train = feats_train.shape[0]
         ys_train = _ys_from_y(y_train, n_train)
+        if getattr(self.estimand, "covariates", ()) is None:
+            _check_outcome_not_covariate(estimand, feats_train, ys_train)
         aug_train = estimand.augment(feats_train, ys=ys_train)
 
         if Z_valid is not None and len(Z_valid) > 0:

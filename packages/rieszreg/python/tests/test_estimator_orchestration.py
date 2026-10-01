@@ -176,3 +176,21 @@ def test_sklearn_clone_round_trip():
     assert cloned.random_state == 42
     # Cloned estimator is unfit.
     assert not hasattr(cloned, "predictor_")
+
+
+def _binary_df(n=200, seed=0):
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=n)
+    a = rng.binomial(1, 1 / (1 + np.exp(-x))).astype(float)
+    return pd.DataFrame({"a": a, "x": x}), 2 * a + x + rng.normal(size=n)
+
+
+def test_outcome_column_left_in_Z_is_caught():
+    """With covariates=None the outcome would silently become a covariate."""
+    df, y = _binary_df()
+    with pytest.raises(ValueError, match="is the outcome y"):
+        RieszEstimator(estimand=ATE(), backend=_StubBackend()).fit(df.assign(y=y), y)
+    with pytest.warns(UserWarning, match="using column 'y' as a covariate"):
+        RieszEstimator(estimand=ATE(), backend=_StubBackend()).fit(df.assign(y=y))
+    # Naming the covariates is the fix.
+    RieszEstimator(estimand=ATE(covariates=["x"]), backend=_StubBackend()).fit(df.assign(y=y), y)
