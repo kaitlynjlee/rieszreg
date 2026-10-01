@@ -44,11 +44,13 @@ def test_xgboost_backend_parity_with_xgbregressor():
     riesz = RieszBooster(
         estimand=OutcomeRegNormSq(covariates=("x0", "x1")),
         loss=SquaredLoss(),
-        backend=XGBoostBackend(),
+        backend=XGBoostBackend(
+            n_estimators=common["n_estimators"], learning_rate=common["learning_rate"],
+        ),
         max_depth=3,
         reg_lambda=0.0,
         subsample=1.0,
-        **common,
+        random_state=common["random_state"],
     ).fit(df, y)
 
     ref = xgb.XGBRegressor(
@@ -82,9 +84,10 @@ def test_sklearn_backend_parity_with_gradient_boosting():
         estimand=OutcomeRegNormSq(covariates=("x0", "x1")),
         loss=SquaredLoss(),
         backend=SklearnBackend(
-            lambda: DecisionTreeRegressor(max_depth=3, random_state=0)
+            lambda: DecisionTreeRegressor(max_depth=3, random_state=0),
+            n_estimators=common["n_estimators"], learning_rate=common["learning_rate"],
         ),
-        **common,
+        random_state=common["random_state"],
     ).fit(df, y)
 
     ref = GradientBoostingRegressor(
