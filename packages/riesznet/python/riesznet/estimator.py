@@ -56,9 +56,10 @@ class RieszNet(RieszEstimator):
         α-space initialization. ``None`` (default) sets α to the empirical
         loss-minimizing constant ``m̄ = E[m(Z, 1)]`` projected into the
         loss's α-domain. Pass a float to override.
-    validation_fraction : float, default 0.0
-        Fraction of training data held out for early stopping. Required when
-        ``early_stopping_rounds`` is set.
+    validation_fraction : float, default 0.1
+        Fraction of the training rows held out for early stopping. Only used
+        when ``early_stopping_rounds`` is set and no ``eval_set`` is passed
+        to ``fit``.
     early_stopping_rounds : int or None
         Stop fitting after this many epochs without validation-loss
         improvement; restore best-validation weights at end of fit.
@@ -85,8 +86,8 @@ class RieszNet(RieszEstimator):
         dtype: str = "float32",
         grad_clip_norm: float | None = None,
         loss: Loss | None = None,
-        init: float | str | None = None,
-        validation_fraction: float = 0.0,
+        init: float | None = None,
+        validation_fraction: float = 0.1,
         early_stopping_rounds: int | None = None,
         snapshot_epochs: Sequence[int] | None = None,
         random_state: int = 0,
@@ -151,7 +152,9 @@ class RieszNet(RieszEstimator):
             dtype=self.dtype,
             grad_clip_norm=self.grad_clip_norm,
             early_stopping_rounds=self.early_stopping_rounds,
-            validation_fraction=self.validation_fraction,
+            validation_fraction=(
+                self.validation_fraction if self.early_stopping_rounds is not None else 0.0
+            ),
             snapshot_epochs=self._resolved_snapshot_epochs(),
         )
 
@@ -214,7 +217,7 @@ class RieszNet(RieszEstimator):
             grad_clip_norm=hyperparameters.get("grad_clip_norm"),
             loss=loss,
             init=hyperparameters.get("init"),
-            validation_fraction=hyperparameters.get("validation_fraction", 0.0),
+            validation_fraction=hyperparameters.get("validation_fraction", 0.1),
             early_stopping_rounds=hyperparameters.get("early_stopping_rounds"),
             snapshot_epochs=hyperparameters.get("snapshot_epochs"),
             random_state=hyperparameters.get("random_state", 0),

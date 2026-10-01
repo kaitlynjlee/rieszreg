@@ -5,14 +5,11 @@ and surfacing tree-specific hyperparameters on the constructor. Composes
 with ``GridSearchCV``, ``cross_val_predict``, ``Pipeline``.
 
 Hyperparameter names mirror :class:`sklearn.tree.DecisionTreeRegressor`
-where the augmented Bregman-Riesz setting allows. The v0.0.1 names
-``pruning_alpha`` and ``max_leaves`` are accepted as deprecated aliases
-for ``ccp_alpha`` and ``max_leaf_nodes`` and emit ``FutureWarning``.
+where the augmented Bregman-Riesz setting allows.
 """
 
 from __future__ import annotations
 
-import warnings
 from typing import Sequence
 
 from sklearn.utils.validation import check_is_fitted
@@ -77,10 +74,11 @@ class RieszTreeRegressor(RieszEstimator):
         α-space initialization, threaded through to ``RieszEstimator``.
     random_state : int, default=0
         Seeds the per-split feature subsample under ``max_features``.
-    pruning_alpha : float or None, default=None
-        Deprecated. Alias for ``ccp_alpha``; emits ``FutureWarning``.
-    max_leaves : int or None, default=None
-        Deprecated. Alias for ``max_leaf_nodes``; emits ``FutureWarning``.
+    splitter : {"exact", "hist", "random"}, default="exact"
+        Split search. ``"exact"`` scans every threshold; ``"hist"`` bins
+        each feature into ``max_bins`` quantile bins (faster on large n).
+    max_bins : int, default=255
+        Number of bins per feature for ``splitter="hist"``.
     """
 
     def __init__(
@@ -103,10 +101,6 @@ class RieszTreeRegressor(RieszEstimator):
         random_state: int = 0,
         splitter: str = "exact",
         max_bins: int = 255,
-        # Deprecated aliases — keep at the end for backwards-compatible
-        # positional behaviour. ``None`` sentinel → not user-supplied.
-        pruning_alpha: float | None = None,
-        max_leaves: int | None = None,
     ):
         super().__init__(
             estimand=estimand,
@@ -129,35 +123,6 @@ class RieszTreeRegressor(RieszEstimator):
         self.categorical_features = categorical_features
         self.splitter = splitter
         self.max_bins = max_bins
-        # Deprecated aliases stored as-is so sklearn's clone() round-trips
-        # through get_params / __init__. Resolution happens in
-        # _resolved_backend at fit-time so set_params can still flip them.
-        self.pruning_alpha = pruning_alpha
-        self.max_leaves = max_leaves
-
-    # ---- alias resolution ----
-
-    def _resolved_ccp_alpha(self) -> float:
-        if self.pruning_alpha is not None:
-            warnings.warn(
-                "`pruning_alpha` is deprecated; use `ccp_alpha` instead "
-                "(matches sklearn.tree.DecisionTreeRegressor).",
-                FutureWarning,
-                stacklevel=3,
-            )
-            return float(self.pruning_alpha)
-        return float(self.ccp_alpha)
-
-    def _resolved_max_leaf_nodes(self) -> int:
-        if self.max_leaves is not None:
-            warnings.warn(
-                "`max_leaves` is deprecated; use `max_leaf_nodes` instead "
-                "(matches sklearn.tree.DecisionTreeRegressor).",
-                FutureWarning,
-                stacklevel=3,
-            )
-            return int(self.max_leaves)
-        return int(self.max_leaf_nodes)
 
     # ---- backend construction ----
 
@@ -181,11 +146,11 @@ class RieszTreeRegressor(RieszEstimator):
             min_samples_split=self.min_samples_split,
             min_samples_leaf=self.min_samples_leaf,
             min_weight_fraction_leaf=self.min_weight_fraction_leaf,
-            max_leaf_nodes=self._resolved_max_leaf_nodes(),
+            max_leaf_nodes=self.max_leaf_nodes,
             max_features=self.max_features,
             growth_policy=self.growth_policy,
             min_impurity_decrease=self.min_impurity_decrease,
-            ccp_alpha=self._resolved_ccp_alpha(),
+            ccp_alpha=self.ccp_alpha,
             early_stopping_rounds=self.early_stopping_rounds,
             validation_fraction=val_frac,
             categorical_features=cat,
@@ -309,15 +274,11 @@ class RieszTreeRegressor(RieszEstimator):
             min_weight_fraction_leaf=hyperparameters.get(
                 "min_weight_fraction_leaf", 0.0
             ),
-            max_leaf_nodes=hyperparameters.get(
-                "max_leaf_nodes", hyperparameters.get("max_leaves", 31)
-            ),
+            max_leaf_nodes=hyperparameters.get("max_leaf_nodes", 31),
             max_features=hyperparameters.get("max_features"),
             growth_policy=hyperparameters.get("growth_policy", "depthwise"),
             min_impurity_decrease=hyperparameters.get("min_impurity_decrease", 0.0),
-            ccp_alpha=hyperparameters.get(
-                "ccp_alpha", hyperparameters.get("pruning_alpha", 0.0)
-            ),
+            ccp_alpha=hyperparameters.get("ccp_alpha", 0.0),
             early_stopping_rounds=hyperparameters.get("early_stopping_rounds"),
             validation_fraction=hyperparameters.get("validation_fraction", 0.1),
             categorical_features=tuple(int(i) for i in cat) if cat else None,

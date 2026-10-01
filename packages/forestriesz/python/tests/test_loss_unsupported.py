@@ -34,5 +34,5 @@ def test_constant_basis_error_mentions_sieve(small_df):
         n_estimators=10,
         random_state=0,
     )
-    with pytest.raises(ValueError, match="row-constant"):
+    with pytest.raises(ValueError, match="AugForestRieszRegressor"):
         est.fit(small_df)

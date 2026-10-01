@@ -30,8 +30,6 @@ def test_get_set_params(covariate_keys):
         "growth_policy", "min_impurity_decrease", "ccp_alpha",
         "early_stopping_rounds", "validation_fraction", "categorical_features",
         "init", "random_state",
-        # Deprecated aliases stay in get_params() so sklearn clone() round-trips.
-        "max_leaves", "pruning_alpha",
     }
     assert expected.issubset(set(p.keys()))
     est.set_params(max_depth=7, growth_policy="leafwise", max_leaf_nodes=20)

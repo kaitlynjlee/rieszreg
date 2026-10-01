@@ -2,7 +2,21 @@
 
 Random-forest Riesz regression, in **Python** and **R**. A learner package in the [RieszReg family](https://github.com/rieszreg/rieszreg): estimates the Riesz representer α of a linear estimand ψ = E[m(μ)(Z)] using a generalized random forest.
 
-Two backends ship side-by-side:
+Two forest learners ship side by side.
+
+## Which one should I use?
+
+Use **`AugForestRieszRegressor`** unless you are comparing against the published ForestRiesz method.
+
+| | `AugForestRieszRegressor` | `ForestRieszRegressor` |
+|---|---|---|
+| What it is | Recommended forest learner | Reference implementation of ForestRiesz (Chernozhukov et al., ICML 2022) |
+| Estimands | All (`ATE`, `ATT`, `TSM`, `AdditiveShift`, `LocalShift`, custom) | `ATE`, `ATT`, `TSM` out of the box; others need a custom `riesz_feature_fns` |
+| Losses | All four built-in losses | `SquaredLoss` only |
+| Confidence intervals on $\alpha(z)$ | No | Yes, with `honest=True, inference=True` |
+| Defaults | sklearn `RandomForestRegressor` style | The published ForestRiesz / EconML settings |
+
+## How they work
 
 - **`AugForestRieszRegressor`** — augmentation-style. An ensemble of single-tree Riesz regressors (built on `riesztree.RieszTreeBackend`) fit on the augmented dataset of evaluation points $z_r$ with weights $(D_r, C_r)$ that `Estimand.augment` produces. sklearn `RandomForestRegressor`-style hyperparameters; loss-aware splits handle every built-in Bregman loss directly. **Works on every estimand without per-estimand configuration.** No CIs in v1 (the augmented training set has correlated blocks per original row).
 - **`ForestRieszRegressor`** — moment-style. Implements [Chernozhukov, Newey, Quintas-Martínez, Syrgkanis (ICML 2022)](https://proceedings.mlr.press/v162/chernozhukov22a/chernozhukov22a.pdf) on top of EconML's GRF. Trains on $n$ original rows; the user supplies a list of basis functions of the data (`riesz_feature_fns`; auto-resolved for ATE/ATT/TSM). Supports honest-split `predict_interval` for single-basis fits.
@@ -130,8 +144,6 @@ Re-exported from rieszreg — same API, same semantics:
 | `TSM(level, treatment, covariates)` | μ(level, x) | `[1{A=level}]` |
 | `AdditiveShift(delta, ...)` | μ(a + δ, x) − μ(a, x) | none — use `AugForestRieszRegressor` |
 | `LocalShift(delta, threshold, ...)` | 1(a < threshold) · (μ(a + δ, x) − μ(a, x)) | none — use `AugForestRieszRegressor` |
-
-`StochasticIntervention` previously appeared here; it is currently being rewritten and will return.
 
 `AugForestRieszRegressor` works on every row in this table (and any user-defined `Estimand`) without any extra arguments.
 

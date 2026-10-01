@@ -18,11 +18,16 @@ from .backend import ForestRieszBackend
 
 
 class ForestRieszRegressor(RieszEstimator):
-    """Random-forest Riesz regression for the representer α₀ of a linear
-    functional θ(P) = E[m(Z, g₀)].
+    """Reference implementation of ForestRiesz (Chernozhukov, Newey,
+    Quintas-Martínez & Syrgkanis, ICML 2022), kept for comparison with the
+    published method. For general use prefer :class:`AugForestRieszRegressor`,
+    which supports every estimand and every loss.
 
-    Reuses rieszreg's estimand machinery and Bregman-loss framework; swaps in
-    a GRF-based moment backend for the actual fit.
+    Fits the representer α₀ with a generalized random forest (EconML's GRF)
+    on the n original rows. Supports ``ATE``, ``ATT`` and ``TSM`` out of the
+    box (other estimands need a custom ``riesz_feature_fns`` basis), only
+    ``SquaredLoss``, and offers honest confidence intervals via
+    :meth:`predict_interval`.
 
     Parameters
     ----------
@@ -46,15 +51,18 @@ class ForestRieszRegressor(RieszEstimator):
     min_weight_fraction_leaf, min_var_fraction_leaf, max_features,
     min_impurity_decrease, max_samples, min_balancedness_tol, honest,
     inference, fit_intercept, subforest_size, n_jobs, verbose
-        Forest hyperparameters forwarded to EconML's ``BaseGRF``. ``honest``
+        Forest hyperparameters forwarded to EconML's ``BaseGRF``, with the
+        defaults of the published ForestRiesz implementation (which is why
+        they differ from ``AugForestRieszRegressor``'s sklearn-style ones). ``honest``
         defaults to False (cross-fitting works without honesty); enable it
         plus ``inference=True`` to use ``predict_interval``.
     l2 : float
         Ridge added to the per-leaf Jacobian for numerical stability.
     loss : rieszreg.Loss, default=SquaredLoss()
         Currently only ``SquaredLoss`` is supported.
-    init : float, "m1", or None
-        α-space initialization. None defers to ``loss.default_init_alpha()``.
+    init : float or None
+        α-space starting value. ``None`` (default) starts from the constant
+        that minimizes the Riesz loss.
     random_state : int, default=0
     """
 
@@ -81,7 +89,7 @@ class ForestRieszRegressor(RieszEstimator):
         n_jobs: int = -1,
         verbose: int = 0,
         loss: Loss | None = None,
-        init: float | str | None = None,
+        init: float | None = None,
         random_state: int = 0,
     ):
         super().__init__(

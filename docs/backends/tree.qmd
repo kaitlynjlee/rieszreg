@@ -266,7 +266,6 @@ Mirrors `sklearn.tree.DecisionTreeRegressor` where the augmented Bregman-Riesz s
 | `splitter` | `"exact"` | One of `"exact"` (Cython per-feature sweep), `"hist"` (Cython quantile-binned histogram, fastest at large $n$), `"random"` (sklearn ExtraTrees-style), `"python"` (legacy; deprecated, removed in v0.0.3). |
 | `max_bins` | 255 | Quantile bins per feature when `splitter="hist"`. Sklearn HGB convention; fits in `uint8`. |
 
-The v0.0.1 names `max_leaves` and `pruning_alpha` are accepted as deprecated aliases for `max_leaf_nodes` and `ccp_alpha`; passing them emits a `FutureWarning`.
 
 ## Splitter modes {#sec-splitters}
 

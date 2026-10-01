@@ -2,99 +2,46 @@
 
 A family of packages for **Riesz regression** — direct estimation of the Riesz representer α of a linear estimand ψ = E[m(μ)(Z)], the building block of one-step, TMLE, and DML estimators in semiparametric inference.
 
-## Layout
+New here? Start with the [`rieszreg` README](packages/rieszreg/README.md): key terms, a quickstart, cross-fitting with sklearn, and turning $\hat\alpha$ into an ATE estimate.
 
-```
-RieszReg/
-├── rieszreg/         # meta-package: shared abstractions
-│   ├── python/       # Estimand, LossSpec, augmentation, RieszEstimator, testing utilities
-│   └── r/rieszreg/   # shared R6 base class, estimand + loss factories
-├── rieszboost/       # gradient-boosting learner (Lee & Schuler 2025)
-│   ├── python/       # XGBoostBackend, SklearnBackend, RieszBooster
-│   └── r/rieszboost/ # R6 wrapper subclassing rieszreg::RieszEstimatorR6
-├── krrr/             # kernel ridge learner (Singh 2021)
-│   ├── python/       # KernelRidgeBackend, kernels, solvers, KernelRieszRegressor
-│   └── r/krrr/       # R6 wrapper subclassing rieszreg::RieszEstimatorR6
-├── forestriesz/      # random-forest learner (Chernozhukov et al. ICML 2022)
-│   ├── python/       # ForestRieszBackend, ForestRieszRegressor, default_riesz_features
-│   └── r/forestriesz/ # R6 wrapper subclassing rieszreg::RieszEstimatorR6
-├── riesznet/         # neural-network learner (Chernozhukov et al. 2021, Riesz-rep only)
-│   ├── python/       # TorchBackend, TorchPredictor, RieszNet
-│   └── r/riesznet/   # R6 wrapper subclassing rieszreg::RieszEstimatorR6
-├── docs/             # unified Quarto user guide (sklearn-style sectioning)
-├── reference/        # arXiv paper index, shared across packages
-├── .githooks/        # pre-commit hook + shared lint-docs.sh (living-doc rule + tone lint)
-├── .github/workflows # CI (pytest + R parity, docs deploy, doc-tone lint)
-├── scripts/          # setup-hooks.sh (one-time per-clone hook activation)
-└── rieszreg/DESIGN.md  # meta-package design + learner-package contract
-```
+## Packages
 
-The user guide is a single Quarto site at [`docs/`](docs/) — sklearn-style, not per-package — covering Concepts, Get started, Usage, Backends (one sub-page per backend package), R interface, Developing, and References.
+All six packages live in this uv workspace under [`packages/`](packages/):
+
+| Package | Learner class | Method |
+|---|---|---|
+| [`rieszreg`](packages/rieszreg/) | `RieszEstimator` | Shared estimands, losses, and sklearn glue |
+| [`rieszboost`](packages/rieszboost/) | `RieszBooster` | Gradient boosting (Lee & Schuler 2025) |
+| [`krrr`](packages/krrr/) | `KernelRieszRegressor` | Kernel ridge regression (Singh 2021) |
+| [`forestriesz`](packages/forestriesz/) | `AugForestRieszRegressor`, `ForestRieszRegressor` | Random forest (Chernozhukov et al. 2022) |
+| [`riesztree`](packages/riesztree/) | `RieszTreeRegressor` | A single decision tree |
+| [`riesznet`](packages/riesznet/) | `RieszNet` | Neural network (Chernozhukov et al. 2021) |
+
+Each package has a Python module under `python/` and an R6 wrapper under `r/`. The user guide is a single Quarto site at [`docs/`](docs/).
 
 ## Install
 
-The five packages live in sibling GitHub repos:
-[rieszreg](https://github.com/rieszreg/rieszreg) (this repo, the meta-package + unified docs),
-[rieszboost](https://github.com/rieszreg/rieszboost),
-[krrr](https://github.com/rieszreg/krrr),
-[forestriesz](https://github.com/rieszreg/forestriesz),
-[riesznet](https://github.com/rieszreg/riesznet).
-Clone them as siblings into a parent directory; the docs builds and CI assume
-that layout.
-
 ```sh
-mkdir RieszReg && cd RieszReg
 git clone https://github.com/rieszreg/rieszreg.git
-git clone https://github.com/rieszreg/rieszboost.git
-git clone https://github.com/rieszreg/krrr.git
-git clone https://github.com/rieszreg/forestriesz.git
-git clone https://github.com/rieszreg/riesznet.git
-python3 -m venv .venv
-.venv/bin/pip install -e rieszreg/python
-.venv/bin/pip install -e rieszboost/python      # gradient-boosting backend
-.venv/bin/pip install -e krrr/python            # kernel-ridge backend
-.venv/bin/pip install -e forestriesz/python     # random-forest backend
-.venv/bin/pip install -e riesznet/python        # neural-network backend
+cd rieszreg
+uv sync --all-packages --all-extras
 ```
 
-`rieszboost`'s `XGBoostBackend` requires OpenMP; on macOS, `brew install libomp` once.
+`rieszboost` needs OpenMP; on macOS, run `brew install libomp` once.
 
 ## Quickstart
 
-Pick any learner package and compose it with `RieszEstimator`:
+Every learner is an sklearn estimator. Pick one, tell it the estimand and the treatment column, then `fit` and `predict`:
 
 ```python
-from rieszreg import RieszEstimator, ATE
+from rieszboost import RieszBooster, ATE
 
-# Gradient boosting
-from rieszboost.backends import XGBoostBackend
-est = RieszEstimator(estimand=ATE(), backend=XGBoostBackend())
-
-# Kernel ridge
-from krrr import KernelRidgeBackend, Gaussian
-est = RieszEstimator(estimand=ATE(), backend=KernelRidgeBackend(kernel=Gaussian()))
-
-# Random forest
-from forestriesz import ForestRieszBackend
-est = RieszEstimator(estimand=ATE(), backend=ForestRieszBackend(n_estimators=500))
-
-# Neural network
-from riesznet import TorchBackend
-est = RieszEstimator(estimand=ATE(), backend=TorchBackend(epochs=200))
-
-est.fit(df)
-alpha_hat = est.predict(df)
+est = RieszBooster(estimand=ATE(treatment="treated"))
+est.fit(Z)                 # Z: DataFrame with the treatment column + covariates
+alpha_hat = est.predict(Z)
 ```
 
-Each learner package also ships a convenience subclass (`RieszBooster`, `KernelRieszRegressor`, `ForestRieszRegressor`, `RieszNet`) with backend-specific hyperparameters on the constructor. See the [backends comparison](https://rieszreg.github.io/rieszreg/backends/) to choose.
-
-## Status
-
-- **rieszreg** v0.0.1 — feature-complete: estimand machinery, four Bregman losses, augmentation engine, both `Backend` (augmentation-style) and `MomentBackend` (moment-style) Protocols with orchestrator dispatch, RieszEstimator, base R6 class, testing utilities. 71 Python tests passing.
-- **rieszboost** v0.0.1 — sklearn-compatible `RieszBooster` with `XGBoostBackend` (default) and `SklearnBackend`; 112 Python tests + 11 R parity tests passing.
-- **krrr** v0.0.1 — sklearn-compatible `KernelRieszRegressor`; four solvers (direct, Nyström-CG, RFF, optional Falkon); 36 Python tests + 1 R parity test passing.
-- **forestriesz** v0.0.1 — sklearn-compatible `ForestRieszRegressor` on EconML's `BaseGRF`; locally constant + locally linear sieve fits; honest-split `predict_interval`; 55 Python tests + 1 R parity test passing.
-- **riesznet** v0.0.1 — sklearn-compatible `RieszNet` (default-MLP) and `TorchBackend` (arbitrary `nn.Module` factories) trained with PyTorch autograd against any of the four built-in Bregman losses; 41 Python tests + 1 R parity test passing.
+Swap `RieszBooster` for `KernelRieszRegressor` (krrr), `AugForestRieszRegressor` (forestriesz), `RieszTreeRegressor` (riesztree), or `RieszNet` (riesznet). Each package re-exports the estimands and losses, so one import line is enough. See the [backends comparison](https://rieszreg.github.io/rieszreg/backends/) to choose.
 
 ## Related work
 
@@ -142,7 +89,7 @@ RETICULATE_PYTHON=$(uv run python -c 'import sys; print(sys.executable)') \
 
 ## Contributing a new learner package
 
-`RIESZREG_DESIGN.md` (Part B) is the contract: depend on `rieszreg`, implement either the `Backend` Protocol (augmentation-style — for kernel ridge, gradient boosting) or the `MomentBackend` Protocol (moment-style — for random forests, neural nets), satisfy the sklearn-conformance subset, contribute docs pages to `docs/`, follow the doc-tone and living-doc rules. The pre-commit hook at `.githooks/pre-commit` enforces the doc-tone and API-changes-update-docs rules; activate it once per clone with `bash scripts/setup-hooks.sh`. The `lint-docs` job in `.github/workflows/test.yml` mirrors the doc-tone check in CI.
+[`DESIGN.md`](DESIGN.md) (Part B) is the contract: depend on `rieszreg`, implement either the `Backend` Protocol (augmentation-style — for kernel ridge, gradient boosting) or the `MomentBackend` Protocol (moment-style — for random forests, neural nets), satisfy the sklearn-conformance subset, contribute docs pages to `docs/`, follow the doc-tone and living-doc rules. The pre-commit hook at `.githooks/pre-commit` enforces the doc-tone and API-changes-update-docs rules; activate it once per clone with `bash scripts/setup-hooks.sh`. The `lint-docs` job in `.github/workflows/test.yml` mirrors the doc-tone check in CI.
 
 ## References
 

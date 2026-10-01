@@ -77,7 +77,7 @@ RieszNet <- R6::R6Class(
                           grad_clip_norm = NULL,
                           loss = NULL,
                           init = NULL,
-                          validation_fraction = 0.0,
+                          validation_fraction = 0.1,
                           early_stopping_rounds = NULL,
                           snapshot_epochs = NULL,
                           random_state = 0L) {
@@ -121,8 +121,7 @@ RieszNet <- R6::R6Class(
     #'
     #' Requires `snapshot_epochs` (or the auto-grid default) to have been
     #' enabled at construction.
-    #' @param Z Predictor data.frame (treatment + covariates in
-    #'   `feature_keys` order).
+    #' @param Z Predictor data.frame (treatment + covariates, matched by name).
     #' @param epochs Integer vector of epoch ticks (subset of stored grid);
     #'   defaults to the full stored grid.
     predict_path = function(Z, epochs = NULL) {
