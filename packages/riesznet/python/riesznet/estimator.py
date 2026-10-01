@@ -17,7 +17,6 @@ from typing import Sequence
 import numpy as np
 
 from rieszreg import Estimand, Loss, RieszEstimator, SquaredLoss
-from rieszreg.estimator import _features_from_rows, _rows_from_Z
 
 from .backend import TorchBackend, auto_snapshot_epochs
 from .modules import build_adam, build_mlp
@@ -32,7 +31,8 @@ class RieszNet(RieszEstimator):
     Parameters
     ----------
     estimand : rieszreg.Estimand
-        Carries ``feature_keys`` and the ``m(alpha)(z, y)`` operator.
+        What to estimate, e.g. ``ATE(treatment="treated")``. Also names the
+        treatment and covariate columns (default: every non-treatment column).
     hidden_sizes : tuple of int, default (64, 64)
         MLP hidden-layer widths. Empty tuple gives a linear model.
     activation : {"relu", "tanh", "gelu", "elu", "silu", "leaky_relu"}, default "relu"
@@ -167,12 +167,7 @@ class RieszNet(RieszEstimator):
         ``epochs=epochs[j]`` to within Adam's deterministic-trajectory
         tolerance (bit-equal under fixed seed and identical data ordering).
         """
-        if not hasattr(self, "predictor_"):
-            raise RuntimeError(
-                f"{type(self).__name__} is not fitted yet. Call .fit() first."
-            )
-        rows = _rows_from_Z(Z, self.estimand)
-        feats = _features_from_rows(rows, self.estimand)
+        feats = self._features(Z)
         return self.predictor_.predict_alpha_path(feats, epochs)
 
     # ---- save/load ----

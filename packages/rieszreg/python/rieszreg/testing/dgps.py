@@ -29,7 +29,6 @@ class DGP:
 def linear_gaussian_ate(
     *,
     p_treated: float = 0.5,
-    treatment_effect: float = 1.0,
     sigma_x: float = 1.0,
 ) -> DGP:
     """Linear-Gaussian ATE DGP.
@@ -49,9 +48,7 @@ def linear_gaussian_ate(
         logit = 0.5 * x
         pi = 1.0 / (1.0 + np.exp(-logit))
         a = (rng.uniform(0, 1, size=n) < pi).astype(float)
-        # Outcome (not used by Riesz learner; included for downstream EIF tests).
-        y = treatment_effect * a + 0.5 * x + rng.normal(0.0, 1.0, size=n)
-        return pd.DataFrame({"a": a, "x": x, "y": y})
+        return pd.DataFrame({"a": a, "x": x})
 
     def true_alpha(df) -> np.ndarray:
         x = np.asarray(df["x"])
@@ -86,8 +83,7 @@ def logistic_tsm(level: float = 1.0, sigma_x: float = 1.0) -> DGP:
         logit = 0.5 * x
         pi = 1.0 / (1.0 + np.exp(-logit))
         a = (rng.uniform(0, 1, size=n) < pi).astype(float)
-        y = (a == level).astype(float) + 0.5 * x + rng.normal(0.0, 1.0, size=n)
-        return pd.DataFrame({"a": a, "x": x, "y": y})
+        return pd.DataFrame({"a": a, "x": x})
 
     def true_alpha(df) -> np.ndarray:
         x = np.asarray(df["x"])

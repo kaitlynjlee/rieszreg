@@ -57,7 +57,7 @@ def test_sieve_works_for_tsm(logistic_tsm_df):
 def test_split_features_default_drops_treatment_for_ate():
     from forestriesz import default_split_feature_indices
 
-    idx = default_split_feature_indices(ATE(), default_riesz_features(ATE()))
+    idx = default_split_feature_indices(ATE(covariates=["x"]), default_riesz_features(ATE()))
     # ATE feature_keys = ('a', 'x'); with treatment-indexed sieve, splitter sees only 'x'.
     assert idx == (1,)
 
@@ -65,5 +65,5 @@ def test_split_features_default_drops_treatment_for_ate():
 def test_split_features_default_uses_all_when_no_sieve():
     from forestriesz import default_split_feature_indices
 
-    idx = default_split_feature_indices(ATE(), None)
+    idx = default_split_feature_indices(ATE(covariates=["x"]), None)
     assert idx == (0, 1)

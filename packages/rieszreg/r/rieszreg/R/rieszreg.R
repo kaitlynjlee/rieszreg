@@ -64,14 +64,20 @@ df_to_py <- function(data) {
 
 # ---- Estimand factories (return opaque Python Estimand instances) ----
 
+# NULL covariates -> Python None ("every non-treatment column").
+.cov <- function(covariates) {
+  if (is.null(covariates)) NULL else as.list(covariates)
+}
+
 #' Average treatment effect estimand: m(alpha)(z) = alpha(1, x) - alpha(0, x).
 #' @param treatment Name of the treatment column.
-#' @param covariates Character vector of covariate column names.
+#' @param covariates Character vector of covariate column names. `NULL`
+#'   (default) uses every column of the data other than `treatment`.
 #' @return A Python `Estimand` object, suitable to pass to any RieszReg
 #'   estimator's constructor via `estimand=`.
 #' @export
-ATE <- function(treatment = "a", covariates = "x") {
-  .module()$ATE(treatment = treatment, covariates = as.list(covariates))
+ATE <- function(treatment = "a", covariates = NULL) {
+  .module()$ATE(treatment = treatment, covariates = .cov(covariates))
 }
 
 
@@ -81,8 +87,8 @@ ATE <- function(treatment = "a", covariates = "x") {
 #' alpha_partial with a delta-method EIF (Hubbard 2011) downstream.
 #' @inheritParams ATE
 #' @export
-ATT <- function(treatment = "a", covariates = "x") {
-  .module()$ATT(treatment = treatment, covariates = as.list(covariates))
+ATT <- function(treatment = "a", covariates = NULL) {
+  .module()$ATT(treatment = treatment, covariates = .cov(covariates))
 }
 
 
@@ -90,9 +96,9 @@ ATT <- function(treatment = "a", covariates = "x") {
 #' @param level Fixed treatment value.
 #' @inheritParams ATE
 #' @export
-TSM <- function(level, treatment = "a", covariates = "x") {
+TSM <- function(level, treatment = "a", covariates = NULL) {
   .module()$TSM(level = level, treatment = treatment,
-                covariates = as.list(covariates))
+                covariates = .cov(covariates))
 }
 
 
@@ -100,9 +106,9 @@ TSM <- function(level, treatment = "a", covariates = "x") {
 #' @param delta Shift magnitude.
 #' @inheritParams ATE
 #' @export
-AdditiveShift <- function(delta, treatment = "a", covariates = "x") {
+AdditiveShift <- function(delta, treatment = "a", covariates = NULL) {
   .module()$AdditiveShift(delta = delta, treatment = treatment,
-                          covariates = as.list(covariates))
+                          covariates = .cov(covariates))
 }
 
 
@@ -112,26 +118,9 @@ AdditiveShift <- function(delta, treatment = "a", covariates = "x") {
 #' @param threshold Cutoff; only rows with `a < threshold` get shifted.
 #' @inheritParams ATE
 #' @export
-LocalShift <- function(delta, threshold, treatment = "a", covariates = "x") {
+LocalShift <- function(delta, threshold, treatment = "a", covariates = NULL) {
   .module()$LocalShift(delta = delta, threshold = threshold,
-                       treatment = treatment, covariates = as.list(covariates))
-}
-
-
-#' Stochastic intervention estimand (currently being rewritten).
-#'
-#' Calling this raises `NotImplementedError` from the Python side. Downstream
-#' R packages still import this name so their NAMESPACE files keep working;
-#' the factory will be reintroduced in a future PR.
-#' @inheritParams ATE
-#' @param samples_key Column holding the per-row sample vectors (currently
-#'   unused while the factory is stubbed).
-#' @export
-StochasticIntervention <- function(samples_key = "shift_samples",
-                                   treatment = "a", covariates = "x") {
-  .module()$StochasticIntervention(samples_key = samples_key,
-                                   treatment = treatment,
-                                   covariates = as.list(covariates))
+                       treatment = treatment, covariates = .cov(covariates))
 }
 
 
@@ -214,12 +203,12 @@ RieszEstimatorR6 <- R6::R6Class(
     },
 
     #' Fit the estimator on a predictor data.frame and an outcome vector.
-    #' @param Z Training predictor data (R data.frame; converted to pandas).
-    #'   Holds the treatment column(s) plus covariates in the estimand's
-    #'   `feature_keys` order.
-    #' @param y Training outcome vector (numeric). Required by the sklearn
-    #'   convention; built-in estimands ignore it, custom Y-dependent
-    #'   estimands read it via `m(alpha)(z, y)`.
+    #' @param Z Training predictor data (R data.frame; converted to pandas):
+    #'   the treatment column plus covariates, matched by name. Leave the
+    #'   outcome out of `Z`.
+    #' @param y Optional outcome vector (numeric). The built-in treatment
+    #'   estimands ignore it; estimands whose functional reads the outcome
+    #'   need it.
     #' @param eval_set Optional held-out predictor data.frame for early
     #'   stopping / λ selection.
     #' @param eval_y Optional outcome vector aligned with `eval_set`.

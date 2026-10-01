@@ -12,7 +12,7 @@ def test_linear_gaussian_ate_sample_shape_and_columns():
     dgp = dgps.linear_gaussian_ate()
     rng = np.random.default_rng(0)
     df = dgp.sample(200, rng)
-    assert {"a", "x", "y"}.issubset(df.columns)
+    assert list(df.columns) == ["a", "x"]
     assert len(df) == 200
     assert dgp.feature_keys == ("a", "x")
     assert dgp.estimand_factory == "ATE"

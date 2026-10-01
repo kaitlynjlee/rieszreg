@@ -17,27 +17,43 @@ from rieszreg import (
     estimand_from_spec,
     trace,
 )
-from rieszreg.estimands.base import StochasticIntervention
 
 
 @pytest.mark.parametrize(
     "estimand,expected_keys",
     [
-        (ATE(), ("a", "x")),
-        (ATT(), ("a", "x")),
-        (TSM(level=1), ("a", "x")),
-        (AdditiveShift(delta=0.5), ("a", "x")),
-        (LocalShift(delta=0.3, threshold=0.7), ("a", "x")),
-        (OutcomeRegNormSq(), ("x",)),
+        (ATE(), ("a", "x", "w")),
+        (ATT(), ("a", "x", "w")),
+        (TSM(level=1), ("a", "x", "w")),
+        (AdditiveShift(delta=0.5), ("a", "x", "w")),
+        (LocalShift(delta=0.3, threshold=0.7), ("a", "x", "w")),
+        (OutcomeRegNormSq(), ("x", "a", "w")),
     ],
 )
-def test_factory_feature_keys(estimand, expected_keys):
-    assert estimand.feature_keys == expected_keys
+def test_bind_defaults_to_all_other_columns(estimand, expected_keys):
+    # covariates=None: treatment stays first, every other column is a covariate.
+    bound = estimand.bind(["x", "a", "w"])
+    assert bound.feature_keys == expected_keys
+    assert type(bound) is type(estimand)
 
 
-def test_stochastic_intervention_stub_raises():
-    with pytest.raises(NotImplementedError, match="being rewritten"):
-        StochasticIntervention()
+def test_bind_ndarray_width_puts_treatment_first():
+    assert ATE().bind(3).feature_keys == ("a", "x0", "x1")
+    assert OutcomeRegNormSq().bind(2).feature_keys == ("x0", "x1")
+
+
+def test_bind_keeps_explicit_covariates():
+    est = ATE(treatment="t", covariates=("age",))
+    assert est.bind(["t", "age", "income"]) is est
+
+
+def test_bind_names_missing_treatment():
+    with pytest.raises(ValueError, match="treatment='treated'"):
+        ATE().bind(["treated", "age"])
+
+
+def test_string_covariates_is_one_column():
+    assert ATE(covariates="age").feature_keys == ("a", "age")
 
 
 @pytest.mark.parametrize(
@@ -117,3 +133,24 @@ def test_custom_estimand_can_read_y():
     # y ≤ tau: indicator = 0, all coefficients zero (returned as []).
     pairs_below = trace(est, {"a": 0.0, "x": 1.5}, y=0.2)
     assert pairs_below == []
+
+
+class _MyShift(AdditiveShift):
+    pass
+
+
+def test_builtin_subclass_survives_copy_pickle_and_clone():
+    import copy
+
+    from sklearn.base import clone
+
+    from rieszreg import RieszEstimator
+
+    est = _MyShift(delta=0.5, covariates=["x"])
+    for twin in (copy.deepcopy(est), pickle.loads(pickle.dumps(est))):
+        assert type(twin) is _MyShift and twin == est
+    cloned = clone(RieszEstimator(estimand=est)).estimand
+    assert type(cloned) is _MyShift and cloned == est
+    # A user subclass isn't a registered built-in, so save() treats it as custom.
+    assert est.factory_spec is None
+    assert _MyShift(delta=0.5) != AdditiveShift(delta=0.5)

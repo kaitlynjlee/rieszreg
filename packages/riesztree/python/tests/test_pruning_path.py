@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 from riesztree import (
     ATE,
@@ -114,7 +115,7 @@ def test_pruning_path_with_Z_y_clones_estimator():
 
 def test_pruning_path_unfitted_no_data_raises():
     est = RieszTreeRegressor(estimand=_ate(3), max_depth=4)
-    with pytest.raises(RuntimeError, match="unfitted"):
+    with pytest.raises(NotFittedError):
         est.cost_complexity_pruning_path()
 
 

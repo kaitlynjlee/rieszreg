@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 import rieszboost
 from rieszboost import RieszBooster
@@ -124,7 +125,7 @@ def test_score_matches_negative_riesz_loss():
 
 def test_unfitted_booster_raises():
     booster = RieszBooster(estimand=rieszboost.ATE())
-    with pytest.raises(RuntimeError):
+    with pytest.raises(NotFittedError):
         booster.predict(np.array([[1.0, 0.5]]))
 
 

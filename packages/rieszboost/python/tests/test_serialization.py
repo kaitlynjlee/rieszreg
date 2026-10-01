@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 import rieszboost
 from rieszboost import RieszBooster
@@ -124,7 +125,7 @@ def test_custom_estimand_requires_explicit_estimand_on_load(tmp_path):
 
 def test_save_unfitted_raises(tmp_path):
     b = RieszBooster(estimand=rieszboost.ATE())
-    with pytest.raises(RuntimeError, match="unfitted"):
+    with pytest.raises(NotFittedError):
         b.save(tmp_path / "bad")
 
 

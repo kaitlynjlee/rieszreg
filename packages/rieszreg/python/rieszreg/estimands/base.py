@@ -75,6 +75,14 @@ class FiniteEvalEstimand(Estimand):
     def __call__(self, alpha):
         return self.m(alpha)
 
+    def bind(self, columns) -> "FiniteEvalEstimand":
+        """Return the estimand with its input columns resolved against the
+        data: ``columns`` is a DataFrame's column names, or an ndarray's
+        column count. Custom estimands have fixed ``feature_keys`` and return
+        themselves; built-ins with ``covariates=None`` return a copy whose
+        covariates are every non-treatment column."""
+        return self
+
     def __eq__(self, other) -> bool:
         if not isinstance(other, FiniteEvalEstimand):
             return NotImplemented
@@ -183,41 +191,123 @@ def _rebuild_custom_estimand(feature_keys, m, name):
     return FiniteEvalEstimand(feature_keys=feature_keys, m=m, name=name)
 
 
+def _rebuild_builtin(cls, spec_args):
+    return cls(**spec_args)
+
+
 # ---------------------------------------------------------------------------
 # Built-in subclasses. Each provides:
-#   - __init__ that stores treatment/covariate names, builds `m`, and seeds
-#     `factory_spec` for round-trip.
+#   - __init__ forwarding its own args (level, delta, ...) to `_BuiltinEstimand`,
+#     which stores treatment / covariate names and seeds `factory_spec`.
+#   - `_m(alpha)` building the functional. It reads covariates from whatever
+#     keys the row carries, so it works before and after `bind`.
 #   - `augment(features, ys=None)` override that emits augmented rows in
 #     vectorised numpy. Row order is implementation-defined and not part of
 #     the public contract.
 #   - class-level `m_bar` giving the closed-form E[m(alpha=1)(Z)].
 
 
-class ATE(FiniteEvalEstimand):
-    """Average treatment effect: m(α)(z, y) = α(1, x) − α(0, x)."""
+class _BuiltinEstimand(FiniteEvalEstimand):
+    """Shared plumbing for the built-in estimands.
 
-    name = "ATE"
-    m_bar = 0.0
+    ``treatment`` names the treatment column (``None`` for estimands with no
+    treatment). ``covariates`` names the covariate columns; ``None`` means
+    "every other column of the data", resolved at fit time by :meth:`bind`.
+    The treatment is always column 0 of ``feature_keys``; ``augment`` reads it
+    positionally, so an unbound estimand augments ndarray input directly.
+    """
 
-    def __init__(self, treatment: str = "a", covariates: Sequence[str] = ("x",)):
-        cov = tuple(covariates)
+    def __init__(self, treatment: str | None, covariates, **args):
+        if isinstance(covariates, str):
+            covariates = (covariates,)
+        cov = None if covariates is None else tuple(covariates)
         self.treatment = treatment
         self.covariates = cov
-
-        def m(alpha):
-            def inner(z, y=None):
-                x_kwargs = {k: z[k] for k in cov}
-                return alpha(**{treatment: 1, **x_kwargs}) - alpha(**{treatment: 0, **x_kwargs})
-            return inner
-
+        for k, v in args.items():
+            setattr(self, k, v)
+        spec_args = dict(args)
+        if treatment is not None:
+            spec_args["treatment"] = treatment
+        spec_args["covariates"] = None if cov is None else list(cov)
+        self._spec_args = spec_args
+        label = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        # Only the registered built-ins round-trip by name through save/load.
+        # A user subclass (class MyShift(AdditiveShift)) is saved as custom.
+        builtin = _FACTORY_REGISTRY.get(type(self).__name__) is type(self)
         super().__init__(
-            feature_keys=(treatment, *cov), m=m,
-            factory_spec={"factory": "ATE", "args": {"treatment": treatment, "covariates": list(cov)}},
+            feature_keys=() if cov is None else (*self._treatment_keys(), *cov),
+            m=self._m,
+            name=f"{type(self).__name__}({label})" if label else type(self).__name__,
+            factory_spec={"factory": type(self).__name__, "args": spec_args} if builtin else None,
         )
+
+    # Identity is (class, constructor args), so pickling, deepcopy and
+    # sklearn.clone preserve subclasses of the built-ins.
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, _BuiltinEstimand):
+            return NotImplemented
+        return type(self) is type(other) and self._spec_args == other._spec_args
+
+    def __hash__(self) -> int:
+        import json
+        return hash((type(self), json.dumps(self._spec_args, sort_keys=True, default=str)))
+
+    def __reduce__(self):
+        return (_rebuild_builtin, (type(self), self._spec_args))
+
+    def _treatment_keys(self) -> tuple[str, ...]:
+        return () if self.treatment is None else (self.treatment,)
+
+    def _covariate_values(self, z) -> dict:
+        return {k: v for k, v in z.items() if k != self.treatment}
+
+    def bind(self, columns) -> "_BuiltinEstimand":
+        if self.covariates is not None:
+            return self
+        t = self._treatment_keys()
+        if isinstance(columns, int):
+            # ndarray input: treatment is column 0, the rest are covariates.
+            cov = [f"x{j}" for j in range(columns - len(t))]
+        else:
+            columns = [str(c) for c in columns]
+            if self.treatment is not None and self.treatment not in columns:
+                raise ValueError(
+                    f"{self.name} needs a treatment column named {self.treatment!r}, "
+                    f"but the data has columns {columns}. Tell the estimand which "
+                    f"column is the treatment, e.g. {type(self).__name__}("
+                    f"treatment={columns[0]!r})."
+                )
+            cov = [c for c in columns if c != self.treatment]
+        return type(self)(**{**self._spec_args, "covariates": cov})
+
+
+class ATE(_BuiltinEstimand):
+    """Average treatment effect: m(α)(z, y) = α(1, x) − α(0, x).
+
+    Parameters
+    ----------
+    treatment : str, default="a"
+        Name of the binary (0/1) treatment column.
+    covariates : sequence of str or None, default=None
+        Names of the covariate columns. ``None`` uses every column of the
+        data other than ``treatment``. For ndarray input, column 0 is the
+        treatment and the remaining columns are the covariates.
+    """
+
+    m_bar = 0.0
+
+    def __init__(self, treatment: str = "a", covariates: Sequence[str] | None = None):
+        super().__init__(treatment, covariates)
+
+    def _m(self, alpha):
+        def inner(z, y=None):
+            x = self._covariate_values(z)
+            return alpha(**{self.treatment: 1, **x}) - alpha(**{self.treatment: 0, **x})
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
-        a_idx = self.feature_keys.index(self.treatment)
+        a_idx = 0  # treatment is always column 0 of feature_keys
         a = features[:, a_idx]
         treated = features.copy()
         treated[:, a_idx] = 1.0
@@ -232,38 +322,30 @@ class ATE(FiniteEvalEstimand):
         )
 
 
-class ATT(FiniteEvalEstimand):
+class ATT(_BuiltinEstimand):
     """ATT *partial-estimand* surface: m(α)(z, y) = a · (α(1, x) − α(0, x)).
 
     Full ATT divides by P(A=1) and is not a Riesz functional — combine
     α̂_partial with a delta-method EIF (Hubbard 2011) downstream.
+    ``treatment`` and ``covariates`` work as in :class:`ATE`.
     """
 
-    name = "ATT"
     m_bar = 0.0
 
-    def __init__(self, treatment: str = "a", covariates: Sequence[str] = ("x",)):
-        cov = tuple(covariates)
-        self.treatment = treatment
-        self.covariates = cov
+    def __init__(self, treatment: str = "a", covariates: Sequence[str] | None = None):
+        super().__init__(treatment, covariates)
 
-        def m(alpha):
-            def inner(z, y=None):
-                a = z[treatment]
-                x_kwargs = {k: z[k] for k in cov}
-                return a * (
-                    alpha(**{treatment: 1, **x_kwargs}) - alpha(**{treatment: 0, **x_kwargs})
-                )
-            return inner
-
-        super().__init__(
-            feature_keys=(treatment, *cov), m=m,
-            factory_spec={"factory": "ATT", "args": {"treatment": treatment, "covariates": list(cov)}},
-        )
+    def _m(self, alpha):
+        def inner(z, y=None):
+            x = self._covariate_values(z)
+            return z[self.treatment] * (
+                alpha(**{self.treatment: 1, **x}) - alpha(**{self.treatment: 0, **x})
+            )
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
-        a_idx = self.feature_keys.index(self.treatment)
+        a_idx = 0  # treatment is always column 0 of feature_keys
         a = features[:, a_idx]
         treated_mask = (a == 1.0)
         control = features[~treated_mask]
@@ -293,32 +375,26 @@ class ATT(FiniteEvalEstimand):
         )
 
 
-class TSM(FiniteEvalEstimand):
-    """Treatment-specific mean: m(α)(z, y) = α(level, x)."""
+class TSM(_BuiltinEstimand):
+    """Treatment-specific mean: m(α)(z, y) = α(level, x).
+
+    ``level`` is the treatment value to evaluate at. ``treatment`` and
+    ``covariates`` work as in :class:`ATE`.
+    """
 
     m_bar = 1.0
 
-    def __init__(self, level, treatment: str = "a", covariates: Sequence[str] = ("x",)):
-        cov = tuple(covariates)
-        self.level = level
-        self.treatment = treatment
-        self.covariates = cov
+    def __init__(self, level, treatment: str = "a", covariates: Sequence[str] | None = None):
+        super().__init__(treatment, covariates, level=level)
 
-        def m(alpha):
-            def inner(z, y=None):
-                x_kwargs = {k: z[k] for k in cov}
-                return alpha(**{treatment: level, **x_kwargs})
-            return inner
-
-        super().__init__(
-            feature_keys=(treatment, *cov), m=m,
-            name=f"TSM(level={level!r})",
-            factory_spec={"factory": "TSM", "args": {"level": level, "treatment": treatment, "covariates": list(cov)}},
-        )
+    def _m(self, alpha):
+        def inner(z, y=None):
+            return alpha(**{self.treatment: self.level, **self._covariate_values(z)})
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
-        a_idx = self.feature_keys.index(self.treatment)
+        a_idx = 0  # treatment is always column 0 of feature_keys
         a = features[:, a_idx]
         eq_mask = (a == self.level)
         eq = features[eq_mask]
@@ -346,37 +422,29 @@ class TSM(FiniteEvalEstimand):
         )
 
 
-class AdditiveShift(FiniteEvalEstimand):
-    """Additive shift effect: m(α)(z, y) = α(a + δ, x) − α(a, x)."""
+class AdditiveShift(_BuiltinEstimand):
+    """Additive shift effect: m(α)(z, y) = α(a + δ, x) − α(a, x).
+
+    ``delta`` is the (non-zero) amount added to a continuous treatment.
+    ``treatment`` and ``covariates`` work as in :class:`ATE`.
+    """
 
     m_bar = 0.0
 
-    def __init__(self, delta: float, treatment: str = "a", covariates: Sequence[str] = ("x",)):
+    def __init__(self, delta: float, treatment: str = "a", covariates: Sequence[str] | None = None):
         if delta == 0:
             raise ValueError("AdditiveShift requires delta != 0 (delta=0 is a degenerate, vacuous estimand).")
-        cov = tuple(covariates)
-        self.delta = delta
-        self.treatment = treatment
-        self.covariates = cov
+        super().__init__(treatment, covariates, delta=delta)
 
-        def m(alpha):
-            def inner(z, y=None):
-                a = z[treatment]
-                x_kwargs = {k: z[k] for k in cov}
-                return alpha(**{treatment: a + delta, **x_kwargs}) - alpha(
-                    **{treatment: a, **x_kwargs}
-                )
-            return inner
-
-        super().__init__(
-            feature_keys=(treatment, *cov), m=m,
-            name=f"AdditiveShift(delta={delta})",
-            factory_spec={"factory": "AdditiveShift", "args": {"delta": delta, "treatment": treatment, "covariates": list(cov)}},
-        )
+    def _m(self, alpha):
+        def inner(z, y=None):
+            a, x = z[self.treatment], self._covariate_values(z)
+            return alpha(**{self.treatment: a + self.delta, **x}) - alpha(**{self.treatment: a, **x})
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
-        a_idx = self.feature_keys.index(self.treatment)
+        a_idx = 0  # treatment is always column 0 of feature_keys
         original = features
         shifted = features.copy()
         shifted[:, a_idx] = features[:, a_idx] + self.delta
@@ -389,10 +457,11 @@ class AdditiveShift(FiniteEvalEstimand):
         )
 
 
-class LocalShift(FiniteEvalEstimand):
+class LocalShift(_BuiltinEstimand):
     """LASE *partial-estimand* surface: m(α)(z, y) = 1(a < threshold) · (α(a+δ, x) − α(a, x)).
 
     Full LASE divides by P(A < threshold) and is not a Riesz functional.
+    ``treatment`` and ``covariates`` work as in :class:`ATE`.
     """
 
     m_bar = 0.0
@@ -402,36 +471,24 @@ class LocalShift(FiniteEvalEstimand):
         delta: float,
         threshold: float,
         treatment: str = "a",
-        covariates: Sequence[str] = ("x",),
+        covariates: Sequence[str] | None = None,
     ):
         if delta == 0:
             raise ValueError("LocalShift requires delta != 0 (delta=0 is a degenerate, vacuous estimand).")
-        cov = tuple(covariates)
-        self.delta = delta
-        self.threshold = threshold
-        self.treatment = treatment
-        self.covariates = cov
+        super().__init__(treatment, covariates, delta=delta, threshold=threshold)
 
-        def m(alpha):
-            def inner(z, y=None):
-                a = z[treatment]
-                if a >= threshold:
-                    return 0
-                x_kwargs = {k: z[k] for k in cov}
-                return alpha(**{treatment: a + delta, **x_kwargs}) - alpha(
-                    **{treatment: a, **x_kwargs}
-                )
-            return inner
-
-        super().__init__(
-            feature_keys=(treatment, *cov), m=m,
-            name=f"LocalShift(delta={delta}, threshold={threshold})",
-            factory_spec={"factory": "LocalShift", "args": {"delta": delta, "threshold": threshold, "treatment": treatment, "covariates": list(cov)}},
-        )
+    def _m(self, alpha):
+        def inner(z, y=None):
+            a = z[self.treatment]
+            if a >= self.threshold:
+                return 0
+            x = self._covariate_values(z)
+            return alpha(**{self.treatment: a + self.delta, **x}) - alpha(**{self.treatment: a, **x})
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
-        a_idx = self.feature_keys.index(self.treatment)
+        a_idx = 0  # treatment is always column 0 of feature_keys
         a = features[:, a_idx]
         below_mask = (a < self.threshold)
         above = features[~below_mask]
@@ -459,38 +516,31 @@ class LocalShift(FiniteEvalEstimand):
         )
 
 
-class OutcomeRegNormSq(FiniteEvalEstimand):
+class OutcomeRegNormSq(_BuiltinEstimand):
     """Squared L² norm of the outcome regression: θ_0 = E[μ_0(X)²].
 
     Moment functional `m(α)(z, y) = α(x) · y` has Riesz representer μ_0(x) =
     E[Y | X=x]. Under the squared Bregman-Riesz loss the empirical objective
     collapses to ∑ (α(x_i) − y_i)², so Riesz training reproduces standard MSE
     regression — a parity check against stock sklearn/xgboost/torch regressors.
+    ``covariates=None`` uses every column of the data. Requires ``y`` at fit.
     """
 
-    name = "OutcomeRegNormSq"
     # m_bar = E[m(α=1)(Z, Y)] = E[Y]; data-dependent, fall back to empirical mean.
     m_bar = None
 
-    def __init__(self, covariates: Sequence[str] = ("x",)):
-        cov = tuple(covariates)
-        self.covariates = cov
+    def __init__(self, covariates: Sequence[str] | None = None):
+        super().__init__(None, covariates)
 
-        def m(alpha):
-            def inner(z, y):
-                return alpha(**{k: z[k] for k in cov}) * y
-            return inner
-
-        super().__init__(
-            feature_keys=cov, m=m,
-            factory_spec={"factory": "OutcomeRegNormSq",
-                          "args": {"covariates": list(cov)}},
-        )
+    def _m(self, alpha):
+        def inner(z, y):
+            return alpha(**z) * y
+        return inner
 
     def augment(self, features, ys=None):
         features, n = self._normalise_features(features, ys)
         if ys is None:
-            raise ValueError("OutcomeRegNormSq.augment requires ys (per-row y).")
+            raise ValueError("OutcomeRegNormSq needs the outcome: call fit(X, y).")
         y = np.asarray(ys, dtype=float)
         return AugmentedDataset(
             features=features.copy(),
@@ -499,23 +549,6 @@ class OutcomeRegNormSq(FiniteEvalEstimand):
             origin_index=np.arange(n, dtype=np.int64),
             n_rows=n,
         )
-
-
-def StochasticIntervention(
-    samples_key: str = "shift_samples",
-    treatment: str = "a",
-    covariates: Sequence[str] = ("x",),
-) -> FiniteEvalEstimand:
-    """Stochastic intervention via Monte Carlo samples per row.
-
-    Currently being rewritten — the previous implementation relied on an
-    `extra_keys` payload mechanism that has been removed. A reintroduction
-    will land in a follow-up that establishes how per-row samples flow into
-    `m(alpha)(z, y)` without the payload-column shortcut.
-    """
-    raise NotImplementedError(
-        "StochasticIntervention is being rewritten; will be re-added in a future PR."
-    )
 
 
 # Registry for round-tripping. Updated when new built-in subclasses are added.

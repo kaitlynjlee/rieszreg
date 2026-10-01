@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 from rieszreg import (
     ATE,
@@ -84,8 +85,8 @@ def test_score_uses_squared_yardstick():
     ).fit(df)
 
     def _expected_neg_squared(est):
-        feats = df[list(est.estimand.feature_keys)].to_numpy(dtype=float)
-        aug = est.estimand.augment(feats)
+        feats = df[list(est.estimand_.feature_keys)].to_numpy(dtype=float)
+        aug = est.estimand_.augment(feats)
         eta = est.predictor_.predict_eta(aug.features)
         alpha = est.loss_.link_to_alpha(eta)
         sq = SquaredLoss()
@@ -102,7 +103,7 @@ def test_score_uses_squared_yardstick():
 
 def test_predict_unfitted_raises():
     est = RieszEstimator(estimand=ATE(), backend=_StubBackend())
-    with pytest.raises(RuntimeError, match="not fitted"):
+    with pytest.raises(NotFittedError):
         est.predict(np.zeros((1, 2)))
 
 
@@ -114,9 +115,18 @@ def test_no_backend_raises_at_fit():
 
 def test_dataframe_missing_columns_raises():
     df = pd.DataFrame({"a": [0.0, 1.0]})
-    est = RieszEstimator(estimand=ATE(), backend=_StubBackend())
+    est = RieszEstimator(estimand=ATE(covariates=["x"]), backend=_StubBackend())
     with pytest.raises(ValueError, match="missing columns"):
         est.fit(df)
+
+
+def test_fit_records_sklearn_feature_attributes():
+    df = pd.DataFrame({"x": [0.1, 0.2, 0.3, 0.4], "a": [0.0, 1.0, 0.0, 1.0], "w": [1.0, 2.0, 3.0, 4.0]})
+    est = RieszEstimator(estimand=ATE(), backend=_StubBackend()).fit(df)
+    assert est.n_features_in_ == 3
+    assert list(est.feature_names_in_) == ["a", "x", "w"]
+    # Column order at predict time doesn't matter for DataFrames.
+    np.testing.assert_allclose(est.predict(df[["w", "a", "x"]]), est.predict(df))
 
 
 def test_fit_accepts_y_and_ignores_when_unused():

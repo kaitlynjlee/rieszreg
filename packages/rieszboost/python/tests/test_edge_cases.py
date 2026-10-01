@@ -25,13 +25,13 @@ def _df(n=200, seed=0):
 
 
 def test_extra_columns_in_dataframe_are_ignored():
-    """Columns not in estimand.feature_keys should pass through silently —
+    """With explicit covariates, other columns pass through silently —
     not raise, not affect the fit."""
     df = _df(seed=1)
     df["irrelevant_col"] = np.arange(len(df))
     df["another"] = "string_data"  # would crash if naively passed to xgboost
     booster = RieszBooster(
-        estimand=ATE(), n_estimators=20, learning_rate=0.1, max_depth=3,
+        estimand=ATE(covariates=["x"]), n_estimators=20, learning_rate=0.1, max_depth=3,
     ).fit(df)
     assert booster.predict(df).shape == (len(df),)
 

@@ -70,8 +70,8 @@ def diagnose_kernel(regressor: KernelRieszRegressor, Z) -> KernelDiagnostics:
         # construction in solvers/direct.py — a small redundant cost.
         from rieszreg.estimator import _features_from_Z
 
-        feats = _features_from_Z(Z, regressor.estimand)
-        aug = regressor.estimand.augment(feats)
+        feats = _features_from_Z(Z, regressor.estimand_)
+        aug = regressor.estimand_.augment(feats)
         n_rows = aug.n_rows
         o_mask = aug.is_original > 0
         p_o = aug.features[o_mask]

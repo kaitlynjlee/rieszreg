@@ -8,9 +8,6 @@ yardstick is wanted — e.g. KL on a density-ratio problem — pass
 
 from __future__ import annotations
 
-import numpy as np
-
-from .estimator import _features_from_Z
 from .losses import Loss, SquaredLoss
 
 
@@ -35,17 +32,6 @@ def riesz_scorer(loss: Loss | None = None):
     yardstick = loss if loss is not None else SquaredLoss()
 
     def _scorer(estimator, Z, y=None) -> float:
-        if not hasattr(estimator, "predictor_"):
-            raise RuntimeError(
-                f"{type(estimator).__name__} is not fitted yet."
-            )
-        feats = _features_from_Z(Z, estimator.estimand)
-        aug = estimator.estimand.augment(feats)
-        eta = estimator.predictor_.predict_eta(aug.features)
-        alpha_hat = estimator.loss_.link_to_alpha(eta)
-        return -float(
-            np.sum(yardstick.aug_loss_alpha(aug.is_original, aug.potential_deriv_coef, alpha_hat))
-            / aug.n_rows
-        )
+        return -estimator._loss_on(Z, y, yardstick)
 
     return _scorer

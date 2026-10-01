@@ -14,7 +14,6 @@ End-to-end scripts demonstrating `rieszboost`. Two flavors:
 | `rieszboost.TSM(level=…)` | [`tsm.py`](tsm.py) | E[Y(a*)] estimator with closed-form check |
 | `rieszboost.AdditiveShift(delta=…)` | [`lee_schuler/continuous_dgp.py`](lee_schuler/continuous_dgp.py) | ASE on continuous-treatment DGP |
 | `rieszboost.LocalShift(delta, threshold)` | [`lee_schuler/continuous_dgp.py`](lee_schuler/continuous_dgp.py) | LASE partial-parameter + delta-method |
-| `rieszboost.StochasticIntervention(samples_key=…)` | [`stochastic_intervention.py`](stochastic_intervention.py) | IPSI-style: Monte Carlo over an intervention density |
 
 Run any of them with `.venv/bin/python examples/<script>.py --n_reps 50` (defaults are smaller for short wall time).
 
