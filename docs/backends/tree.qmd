@@ -286,8 +286,8 @@ for sp in ["exact", "hist", "random"]:
     print(f"splitter={sp:6s}  fit={fit_ms:6.1f} ms  leaves={est.get_n_leaves()}")
 ```
 
-- `"exact"` (default): per-feature linear scan over distinct values. Best partition.
-- `"hist"`: pre-binned (default 255 quantile bins per feature). `O(n_{\text{leaf}} + \text{max\_bins})` per feature per leaf instead of `O(n_{\text{leaf}} \log n_{\text{leaf}})`. Fastest at large $n$; threshold lands on a bin boundary so split-ranking is approximate but the leaf $\alpha^\star$ itself is exact.
+- `"exact"` (default): per-feature linear scan over distinct values. Best partition. Each feature is sorted once per tree and every split keeps the sorted orders by partitioning them, so no node is re-sorted; this holds one extra float64 copy and one int32 index per (augmented row, feature).
+- `"hist"`: pre-binned (default 255 quantile bins per feature). Per node, one pass fills a histogram per feature, and a child's histogram is its parent's minus its sibling's. Fastest at large $n$ and lightest on memory; threshold lands on a bin boundary so split-ranking is approximate but the leaf $\alpha^\star$ itself is exact.
 - `"random"`: sklearn ExtraTrees-style. One uniform threshold per feature per leaf; useful for forest decorrelation when combined with `max_features="sqrt"`.
 
 For losses outside the four built-ins (`SquaredLoss`, `KLLoss`, `BernoulliLoss`, `BoundedSquaredLoss`), register a Numba `@cfunc` via `riesztree.fast.register_fast_leaf_solver`. Registered losses run on `splitter="exact"`. The registry is checked before the built-ins, so registering a subclass of a built-in loss overrides its kernel for both split search and leaf values. Unregistered custom losses raise `NotImplementedError` at fit.
@@ -690,3 +690,5 @@ The held-out depth that minimises RMSE for `riesztree` typically sits in the 4â€
 - **No confidence intervals in v1.** Honest splits are not implemented.
 - **Constant per-leaf $\alpha$ only.** Linear-in-$X$ and treatment-sieve leaves are documented as future work.
 - **Loss-domain disqualifications.** Under KL / Bernoulli some split candidates put a child outside the link's $\alpha$-domain and are ruled out, so the tree may be shallower than `max_depth`. This is the splitter respecting the domain, not a bug.
+- **No missing values.** A `NaN` in any covariate raises at fit and at predict; impute or drop missing values first.
+- **Early stopping counts splits depth-first under `growth_policy="depthwise"`.** The rolled-back tree is the best prefix of a depth-first walk, so the left of the tree can be deep while right-hand nodes near the root stay unsplit. `growth_policy="leafwise"` stops on the best-first sequence of splits instead, which is usually what early stopping is meant to do.

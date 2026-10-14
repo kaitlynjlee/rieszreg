@@ -10,7 +10,7 @@ Categorical splits store the "go-left" level set as a Python
 ``frozenset[int]`` in ``cat_left_sets[i]``; for non-categorical splits
 that slot is ``None``. The Cython predict loop handles continuous
 splits at C speed and falls back to a Python-level ``in`` check for
-categoricals (Phase 8 will Cythonize that path too).
+categoricals.
 
 Building a ``FlatTree`` from a ``Node`` is O(n_nodes) and runs once at
 fit time; subsequent prediction is then O(n_rows × depth) at C speed.
@@ -127,27 +127,21 @@ def flat_tree_from_node(root: "Node") -> FlatTree:
     )
 
 
-def node_from_growable_flat_tree(growable, loss=None) -> "Node":
+def node_from_growable_flat_tree(growable, loss) -> "Node":
     """Convert a :class:`riesztree.fast._grow_c.GrowableFlatTree`
     (used during fit by the iterative-grow Cython driver) into a
-    ``Node`` tree for backward-compat with diagnostics, pruning, and
-    serialisation.
+    ``Node`` tree for diagnostics, pruning, and serialisation.
 
-    The growable carries per-node ``D_sum``, ``C_sum``, ``n_orig``,
+    The growable carries per-node ``D_sum``, ``C_sum``, ``n_orig``, ``n_aug``,
     ``gain``, ``depth``, plus the structural fields
     ``feature``/``threshold``/``left``/``right`` and ``value``
-    (per-leaf α*). When ``loss`` is provided, the per-node
-    ``leaf_loss_value`` is recomputed via the loss's leaf-loss
-    kernel; otherwise it's left at 0.0 (cost-complexity pruning will
-    refill it on demand).
+    (per-leaf α*). Each leaf's ``leaf_loss_value``, which pruning reads,
+    comes from ``loss``'s leaf-loss kernel.
     """
+    from ..splitter import make_leaf_solvers
     from ..tree import Node
 
-    if loss is not None:
-        from ..splitter import make_leaf_solvers
-        leaf_loss_fn, _ = make_leaf_solvers(loss)
-    else:
-        leaf_loss_fn = lambda _D, _C: 0.0
+    leaf_loss_fn, _ = make_leaf_solvers(loss)
 
     feature = growable.feature
     threshold = growable.threshold
@@ -157,6 +151,7 @@ def node_from_growable_flat_tree(growable, loss=None) -> "Node":
     D_sum = growable.D_sum
     C_sum = growable.C_sum
     n_orig = growable.n_orig
+    n_aug = growable.n_aug
     gain = growable.gain
     depth = growable.depth
     n_used = int(growable.n_nodes_used)
@@ -169,7 +164,7 @@ def node_from_growable_flat_tree(growable, loss=None) -> "Node":
             D=float(D_sum[idx]),
             C=float(C_sum[idx]),
             n_orig=int(n_orig[idx]),
-            n_aug=0,                  # not tracked by the growable; cheap to omit
+            n_aug=int(n_aug[idx]),
             depth=int(depth[idx]),
             alpha=float(value[idx]),
             leaf_loss_value=float(leaf_loss_fn(float(D_sum[idx]), float(C_sum[idx])))

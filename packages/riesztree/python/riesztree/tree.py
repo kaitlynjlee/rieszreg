@@ -1,9 +1,9 @@
 """Tree datastructure: ``Node`` + traversal + serialization helpers.
 
-Nodes are organised as a Python class hierarchy. For prediction we walk the
-tree in pure Python; for n=10⁵ rows × depth ~10 the dispatch overhead is
-tens of milliseconds, well below the splitter's cost. A flat-array
-representation could replace this once profiling justifies it.
+Nodes are organised as a Python class hierarchy, the source of truth for
+diagnostics, pruning and serialization. Prediction runs on a flat-array
+copy (:class:`riesztree.fast.FlatTree`) with a Cython loop;
+:func:`predict_array` is the pure-Python reference the parity tests use.
 
 Continuous splits use ``feature_index, threshold`` (left = ``x ≤ thr``).
 Categorical splits use ``feature_index, left_levels`` (left = ``x in left_levels``).
@@ -48,9 +48,20 @@ class Node:
         return node.alpha
 
 
-def check_categorical(features: np.ndarray, categorical_features) -> None:
-    """Categorical columns hold integer level codes; raise on NaN or
-    non-integer values (they would be truncated or undefined downstream)."""
+def check_features(features: np.ndarray, categorical_features) -> None:
+    """Validate features before a tree fits on or predicts from them.
+
+    Trees have no missing-value handling: a NaN would sort inconsistently
+    in the split sweep (the compiled sort's comparisons are all false) and
+    always fall right at a split, so NaN is rejected. Categorical columns
+    hold integer level codes; non-integer values would be truncated."""
+    if np.isnan(features).any():
+        cols = np.flatnonzero(np.isnan(features).any(axis=0)).tolist()
+        raise ValueError(
+            f"Feature columns {cols[:5]} (0-based, in the estimand's "
+            "feature_keys order, treatment first) contain NaN. Tree learners "
+            "don't handle missing values; impute or drop them before fitting."
+        )
     for j in categorical_features:
         col = features[:, j]
         bad = ~np.isfinite(col) | (col != np.round(col))

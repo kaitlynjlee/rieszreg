@@ -3,168 +3,50 @@
 # cython: wraparound=False
 # cython: cdivision=True
 # cython: initializedcheck=False
-"""Iterative depthwise grow loop for the exact (per-leaf-sort) splitter.
+"""Iterative depthwise grow loop for the exact splitter, on presorted columns.
 
 Mirrors :func:`riesztree.fast._grow_c.grow_depthwise_hist_c` (the
 histogram-path Cython driver) but operates on raw continuous features
-instead of pre-binned features. Per leaf, for each candidate feature,
-the active rows are sorted by feature value via a small in-Cython
-quicksort and swept by the same gain formula the existing Cython
-exact splitter already uses.
+instead of pre-binned features.
 
-Eliminates two costs in the existing Python-driven exact path:
-
-  1. The Python-facade overhead of
-     :func:`riesztree.fast._splitter.best_split_continuous_fast` per
-     (leaf × feature) — currently ~5 numpy roundtrips per call.
-
-  2. The redundant ``np.ascontiguousarray(features[:, j], ...)`` per
-     call, which copies a non-contiguous column view per
-     (leaf × feature). Profiles show this alone is ~45% of fit time at
-     unlimited depth.
+Each feature is argsorted once, at the root. Every node owns the same
+slice ``[start, end)`` of all ``p`` sorted index arrays, and each slice
+stays sorted by its feature: a split stable-partitions every feature's
+slice (left rows first, sorted order kept within each side). The split
+search for a node then reads its rows in sorted order directly, so a level
+of the tree costs O(n_aug · p) rather than the O(n_aug · p · log n_node)
+of sorting each (node × feature) slice. The price is one int32 index per
+(row, feature), plus a column-major copy of the features.
 
 Same scope guards as :func:`grow_depthwise_hist_c`: ``splitter='exact'``,
 ``growth_policy='depthwise'``, no categoricals, no max_features
-subsampling, no early stopping, no validation set, built-in (or
-user-registered) loss. Other configurations keep the existing Python
-recursion in :mod:`riesztree.grow`.
+subsampling, no early stopping, built-in loss. Other configurations keep
+the Python grower in :mod:`riesztree.grow`.
 """
 
 import numpy as np
 cimport numpy as cnp
 from libc.math cimport INFINITY, isfinite
-from libc.stdlib cimport malloc, free
 
 from ._loss_kernels cimport dispatch_leaf_loss, dispatch_alpha_at_opt
 
 ctypedef cnp.float64_t f64
 ctypedef cnp.int64_t i64
 ctypedef cnp.int32_t i32
+ctypedef cnp.uint8_t u8
 
 
 # ---------------------------------------------------------------------------
-# In-place quicksort on (value, index) pairs.
-#
-# Both arrays are reordered in lockstep so that ``svals`` ends up
-# non-decreasing and ``sidx`` carries the corresponding row indices.
-# Used per (leaf × feature) to compute cumulative sums in feature-sorted
-# order. Median-of-three pivot + insertion-sort cutoff for small
-# partitions; standard textbook quicksort otherwise. Average O(n log n);
-# good enough at our typical leaf sizes (a few rows up to a few thousand).
-
-cdef inline void _insertion_sort_pair(
-    f64[::1] vals, i64[::1] idx, Py_ssize_t lo, Py_ssize_t hi,
-) noexcept nogil:
-    cdef Py_ssize_t i, j
-    cdef double v
-    cdef i64 k
-    for i in range(lo + 1, hi + 1):
-        v = vals[i]
-        k = idx[i]
-        j = i - 1
-        while j >= lo and vals[j] > v:
-            vals[j + 1] = vals[j]
-            idx[j + 1] = idx[j]
-            j -= 1
-        vals[j + 1] = v
-        idx[j + 1] = k
-
-
-cdef inline void _swap_pair(
-    f64[::1] vals, i64[::1] idx, Py_ssize_t a, Py_ssize_t b,
-) noexcept nogil:
-    cdef double tv = vals[a]
-    cdef i64 ti = idx[a]
-    vals[a] = vals[b]
-    idx[a] = idx[b]
-    vals[b] = tv
-    idx[b] = ti
-
-
-cdef void _quicksort_pair(
-    f64[::1] vals, i64[::1] idx, Py_ssize_t lo, Py_ssize_t hi,
-) noexcept nogil:
-    """Quicksort vals[lo:hi+1] (inclusive), keeping idx in lockstep."""
-    cdef Py_ssize_t mid
-    cdef double pivot
-    cdef Py_ssize_t i, j
-    while hi - lo > 16:
-        # Median-of-three pivot selection.
-        mid = lo + ((hi - lo) >> 1)
-        if vals[mid] < vals[lo]:
-            _swap_pair(vals, idx, lo, mid)
-        if vals[hi] < vals[lo]:
-            _swap_pair(vals, idx, lo, hi)
-        if vals[hi] < vals[mid]:
-            _swap_pair(vals, idx, mid, hi)
-        # Move pivot to position hi-1; partition.
-        _swap_pair(vals, idx, mid, hi - 1)
-        pivot = vals[hi - 1]
-        i = lo
-        j = hi - 1
-        while True:
-            i += 1
-            while vals[i] < pivot:
-                i += 1
-            j -= 1
-            while vals[j] > pivot:
-                j -= 1
-            if i >= j:
-                break
-            _swap_pair(vals, idx, i, j)
-        # Restore pivot.
-        _swap_pair(vals, idx, i, hi - 1)
-        # Recurse on smaller side, iterate on the larger.
-        if i - lo < hi - i:
-            _quicksort_pair(vals, idx, lo, i - 1)
-            lo = i + 1
-        else:
-            _quicksort_pair(vals, idx, i + 1, hi)
-            hi = i - 1
-    _insertion_sort_pair(vals, idx, lo, hi)
-
-
-# ---------------------------------------------------------------------------
-# In-place partition of the contiguous index slice on (feature, threshold).
-
-cdef inline Py_ssize_t _partition_inplace_continuous(
-    i64[::1] idx_buf,
-    Py_ssize_t start,
-    Py_ssize_t end,
-    f64[:, ::1] features,
-    int best_feat,
-    double threshold,
-) noexcept nogil:
-    """Two-pointer partition of ``idx_buf[start:end]``: rows with
-    ``features[row, best_feat] <= threshold`` go first. Returns the
-    boundary ``mid`` such that ``idx_buf[start:mid]`` is the left child
-    and ``idx_buf[mid:end]`` is the right child."""
-    cdef Py_ssize_t lo = start
-    cdef Py_ssize_t hi = end - 1
-    cdef i64 tmp, row
-    while lo <= hi:
-        row = idx_buf[lo]
-        if features[row, best_feat] <= threshold:
-            lo += 1
-        else:
-            tmp = idx_buf[hi]
-            idx_buf[hi] = row
-            idx_buf[lo] = tmp
-            hi -= 1
-    return lo
-
-
-# ---------------------------------------------------------------------------
-# Best-split sweep across all features for a single leaf.
+# Best-split sweep across all features for a single node.
 #
 # Returns (best_feat, best_threshold, best_gain) via out parameters.
 # Sets best_feat = -1 if no valid split exists.
 
-cdef void _best_split_at_leaf(
-    f64[:, ::1] features,
+cdef void _best_split_at_node(
+    f64[:, ::1] Xt,        # (p, n_aug) column-major features
+    i32[:, ::1] order,     # (p, n_aug) per-feature sorted row indices
     f64[::1] D,
     f64[::1] C,
-    i64[::1] idx_buf,
     Py_ssize_t start,
     Py_ssize_t end,
     int n_features,
@@ -172,27 +54,26 @@ cdef void _best_split_at_leaf(
     double bounded_lo,
     double bounded_hi,
     int min_orig_leaf,
-    f64[::1] svals,    # scratch, size >= n_leaf
-    i64[::1] sidx,     # scratch
+    f64[::1] svals,    # scratch, size >= n_node
     f64[::1] cum_D,    # scratch
     f64[::1] cum_C,    # scratch
     i64[::1] cum_orig, # scratch
     int* best_feat_out,
+    Py_ssize_t* best_k_out,
     double* best_threshold_out,
     double* best_gain_out,
 ) noexcept nogil:
-    """Best split across all features for the leaf rows ``idx_buf[start:end]``.
+    """Best split across all features for the node's rows.
 
     Per-feature ``total_D`` / ``total_C`` / ``parent_loss`` are recomputed
-    from the sort-order cumulative sums (``cum_*[n_leaf - 1]``) — this
-    matches the per-feature float order used by the legacy Python and
-    Cython splitters, preserving byte-equivalent gain comparisons across
-    paths even on losses sensitive to float-precision (notably KLLoss,
-    whose log() amplifies tiny differences in D / C).
+    from the sort-order cumulative sums (``cum_*[n_node - 1]``), as in the
+    per-node Cython splitter, so gains compare the same way on both paths.
+    ``best_k_out`` is the last left-child position in the winning
+    feature's sorted slice.
     """
-    cdef Py_ssize_t n_leaf = end - start
-    cdef Py_ssize_t i, k
-    cdef i64 row
+    cdef Py_ssize_t n_node = end - start
+    cdef Py_ssize_t k
+    cdef i32 row
     cdef int j
     cdef double total_D, total_C, parent_loss
     cdef i64 total_orig
@@ -202,24 +83,18 @@ cdef void _best_split_at_leaf(
     cdef double feat_best_gain, feat_best_thr
     cdef double best_gain_overall = -INFINITY
     cdef int best_feat = -1
+    cdef Py_ssize_t best_k = -1
     cdef double best_threshold = 0.0
 
     for j in range(n_features):
-        # Extract leaf rows for this feature.
-        for i in range(n_leaf):
-            row = idx_buf[start + i]
-            svals[i] = features[row, j]
-            sidx[i] = row
-
-        # In-place sort by feature value.
-        _quicksort_pair(svals, sidx, 0, n_leaf - 1)
-
-        # Cumulative sums in sorted order.
+        # Gather the node's rows in this feature's sorted order, with
+        # cumulative sums.
         D_l = 0.0
         C_l = 0.0
         n_l = 0
-        for k in range(n_leaf):
-            row = sidx[k]
+        for k in range(n_node):
+            row = order[j, start + k]
+            svals[k] = Xt[j, row]
             D_l += D[row]
             C_l += C[row]
             if D[row] > 0.0:
@@ -228,11 +103,9 @@ cdef void _best_split_at_leaf(
             cum_C[k] = C_l
             cum_orig[k] = n_l
 
-        # Per-feature parent totals derived from the sorted cumsum, to
-        # match the float-precision contract of the legacy splitters.
-        total_D = cum_D[n_leaf - 1]
-        total_C = cum_C[n_leaf - 1]
-        total_orig = cum_orig[n_leaf - 1]
+        total_D = cum_D[n_node - 1]
+        total_C = cum_C[n_node - 1]
+        total_orig = cum_orig[n_node - 1]
         parent_loss = dispatch_leaf_loss(
             loss_kind, total_D, total_C, bounded_lo, bounded_hi
         )
@@ -241,7 +114,7 @@ cdef void _best_split_at_leaf(
         feat_best_gain = -INFINITY
         feat_best_k = -1
         feat_best_thr = 0.0
-        for k in range(n_leaf - 1):
+        for k in range(n_node - 1):
             if svals[k] == svals[k + 1]:
                 continue
             D_l = cum_D[k]
@@ -269,11 +142,52 @@ cdef void _best_split_at_leaf(
         if feat_best_k >= 0 and feat_best_gain > best_gain_overall:
             best_gain_overall = feat_best_gain
             best_feat = j
+            best_k = feat_best_k
             best_threshold = feat_best_thr
 
     best_feat_out[0] = best_feat
+    best_k_out[0] = best_k
     best_threshold_out[0] = best_threshold
     best_gain_out[0] = best_gain_overall
+
+
+# ---------------------------------------------------------------------------
+# Split a node's slice in every feature's sorted order.
+
+cdef void _partition_all_features(
+    i32[:, ::1] order,
+    Py_ssize_t start,
+    Py_ssize_t mid,
+    Py_ssize_t end,
+    int n_features,
+    int best_feat,
+    u8[::1] goes_left,   # scratch, size n_aug
+    i32[::1] right_buf,  # scratch, size >= n_node
+) noexcept nogil:
+    """Stable-partition ``order[j, start:end]`` for every feature ``j`` so the
+    left child's rows come first, each side keeping its sorted order. The
+    winning feature's slice is already split at ``mid`` (its first
+    ``mid - start`` rows are ``<= threshold``)."""
+    cdef Py_ssize_t i, k_l, k_r
+    cdef int j
+    cdef i32 row
+    for i in range(start, end):
+        goes_left[order[best_feat, i]] = 1 if i < mid else 0
+    for j in range(n_features):
+        if j == best_feat:
+            continue
+        k_l = start
+        k_r = 0
+        for i in range(start, end):
+            row = order[j, i]
+            if goes_left[row]:
+                order[j, k_l] = row
+                k_l += 1
+            else:
+                right_buf[k_r] = row
+                k_r += 1
+        for i in range(k_r):
+            order[j, k_l + i] = right_buf[i]
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +205,7 @@ def grow_depthwise_exact_c(
     double bounded_lo,
     double bounded_hi,
 ):
-    """Iterative depthwise grow on the exact (per-leaf-sort) splitter.
+    """Iterative depthwise grow on the exact splitter.
 
     Returns a :class:`riesztree.fast._grow_c.GrowableFlatTree` with one
     slot per node. The Python ``Node`` tree is rebuilt once at fit-end
@@ -301,6 +215,11 @@ def grow_depthwise_exact_c(
 
     cdef Py_ssize_t n_aug = D.shape[0]
     cdef int n_features = features.shape[1]
+    if n_aug >= 2**31 - 1:
+        raise ValueError(
+            f"splitter='exact' indexes rows with int32; got {n_aug} augmented "
+            "rows. Use splitter='hist'."
+        )
 
     # Node cap: a depth-d tree has at most 2^(d+1) - 1 nodes, and every
     # leaf is non-empty, so there are at most 2 * n_aug - 1 nodes.
@@ -318,33 +237,35 @@ def grow_depthwise_exact_c(
     cdef f64[::1] tree_D_sum = tree.D_sum
     cdef f64[::1] tree_C_sum = tree.C_sum
     cdef i64[::1] tree_n_orig = tree.n_orig
+    cdef i64[::1] tree_n_aug = tree.n_aug
     cdef f64[::1] tree_gain_v = tree.gain
     cdef i32[::1] tree_depth = tree.depth
 
-    cdef cnp.ndarray[i64, ndim=1] idx_buf_arr = np.arange(n_aug, dtype=np.int64)
-    cdef i64[::1] idx_v = idx_buf_arr
-    cdef f64[:, ::1] X_v = features
+    # Column-major features and per-feature sorted row orders (stable, so
+    # ties keep row order). Sorted one feature at a time so the int64
+    # argsort output is never held for all features at once.
+    cdef cnp.ndarray[f64, ndim=2] Xt_arr = np.ascontiguousarray(features.T)
+    cdef cnp.ndarray[i32, ndim=2] order_arr = np.empty((n_features, n_aug), dtype=np.int32)
+    cdef int jj
+    for jj in range(n_features):
+        order_arr[jj] = np.argsort(Xt_arr[jj], kind="stable")
+    cdef f64[:, ::1] Xt_v = Xt_arr
+    cdef i32[:, ::1] order_v = order_arr
     cdef f64[::1] D_v = D
     cdef f64[::1] C_v = C
 
-    # Per-feature scratch buffers, allocated once at fit start and
-    # reused across all (leaf × feature) sort+sweeps. Sized to the
-    # max possible leaf (n_aug at the root); tighter bounds aren't
-    # worth the complexity.
-    cdef cnp.ndarray[f64, ndim=1] svals_arr = np.empty(n_aug, dtype=np.float64)
-    cdef cnp.ndarray[i64, ndim=1] sidx_arr = np.empty(n_aug, dtype=np.int64)
-    cdef cnp.ndarray[f64, ndim=1] cum_D_arr = np.empty(n_aug, dtype=np.float64)
-    cdef cnp.ndarray[f64, ndim=1] cum_C_arr = np.empty(n_aug, dtype=np.float64)
-    cdef cnp.ndarray[i64, ndim=1] cum_orig_arr = np.empty(n_aug, dtype=np.int64)
-    cdef f64[::1] svals_v = svals_arr
-    cdef i64[::1] sidx_v = sidx_arr
-    cdef f64[::1] cum_D_v = cum_D_arr
-    cdef f64[::1] cum_C_v = cum_C_arr
-    cdef i64[::1] cum_orig_v = cum_orig_arr
+    # Scratch buffers, allocated once and reused across nodes. Sized to
+    # the largest node (the root).
+    cdef f64[::1] svals_v = np.empty(n_aug, dtype=np.float64)
+    cdef f64[::1] cum_D_v = np.empty(n_aug, dtype=np.float64)
+    cdef f64[::1] cum_C_v = np.empty(n_aug, dtype=np.float64)
+    cdef i64[::1] cum_orig_v = np.empty(n_aug, dtype=np.int64)
+    cdef u8[::1] goes_left_v = np.empty(n_aug, dtype=np.uint8)
+    cdef i32[::1] right_buf_v = np.empty(n_aug, dtype=np.int32)
 
     # Per-loop scalars.
     cdef Py_ssize_t i
-    cdef i64 row
+    cdef i32 row
     cdef double root_D = 0.0
     cdef double root_C = 0.0
     cdef i64 root_orig = 0
@@ -352,18 +273,17 @@ def grow_depthwise_exact_c(
     cdef Py_ssize_t root_idx
     cdef Py_ssize_t node_idx, start, end
     cdef int depth_v, best_feat
+    cdef Py_ssize_t best_k
     cdef double best_threshold, best_gain
     cdef Py_ssize_t mid, left_idx, right_idx, n_left, n_right
     cdef double left_D, right_D, left_C, right_C, left_alpha, right_alpha
     cdef i64 left_orig, right_orig
-    cdef Py_ssize_t k_iter
 
     # Bootstrap the root.
     for i in range(n_aug):
-        row = idx_v[i]
-        root_D += D_v[row]
-        root_C += C_v[row]
-        if D_v[row] > 0.0:
+        root_D += D_v[i]
+        root_C += C_v[i]
+        if D_v[i] > 0.0:
             root_orig += 1
     root_alpha = dispatch_alpha_at_opt(loss_kind, root_D, root_C, bounded_lo, bounded_hi)
 
@@ -377,6 +297,7 @@ def grow_depthwise_exact_c(
     tree_D_sum[root_idx] = root_D
     tree_C_sum[root_idx] = root_C
     tree_n_orig[root_idx] = root_orig
+    tree_n_aug[root_idx] = n_aug
     tree_depth[root_idx] = 0
     tree.n_nodes_used += 1
 
@@ -399,35 +320,33 @@ def grow_depthwise_exact_c(
         if (end - start) < 2:
             continue
 
-        _best_split_at_leaf(
-            X_v, D_v, C_v, idx_v, start, end, n_features,
+        _best_split_at_node(
+            Xt_v, order_v, D_v, C_v, start, end, n_features,
             loss_kind, bounded_lo, bounded_hi, min_orig_leaf,
-            svals_v, sidx_v, cum_D_v, cum_C_v, cum_orig_v,
-            &best_feat, &best_threshold, &best_gain,
+            svals_v, cum_D_v, cum_C_v, cum_orig_v,
+            &best_feat, &best_k, &best_threshold, &best_gain,
         )
         if best_feat < 0:
             continue
         if best_gain <= min_impurity_decrease:
             continue
 
-        # Partition idx_buf[start:end] in place on (best_feat, best_threshold).
-        mid = _partition_inplace_continuous(
-            idx_v, start, end, X_v, best_feat, best_threshold,
-        )
+        # The winning feature's sorted slice splits after position best_k:
+        # its first rows are exactly those with x <= threshold.
+        mid = start + best_k + 1
         n_left = mid - start
         n_right = end - mid
-        if n_left == 0 or n_right == 0:
-            continue
+        _partition_all_features(
+            order_v, start, mid, end, n_features, best_feat,
+            goes_left_v, right_buf_v,
+        )
 
-        # Compute child leaf payloads via direct sum over the partitioned
-        # slices. Sum left and right independently rather than deriving
-        # ``right = total - left`` to avoid amplifying float-precision
-        # drift in deep subtrees (matters for KLLoss's log-amplified gain).
+        # Child payloads, summed directly over each child's rows.
         left_D = 0.0
         left_C = 0.0
         left_orig = 0
-        for k_iter in range(start, mid):
-            row = idx_v[k_iter]
+        for i in range(start, mid):
+            row = order_v[0, i]
             left_D += D_v[row]
             left_C += C_v[row]
             if D_v[row] > 0.0:
@@ -435,8 +354,8 @@ def grow_depthwise_exact_c(
         right_D = 0.0
         right_C = 0.0
         right_orig = 0
-        for k_iter in range(mid, end):
-            row = idx_v[k_iter]
+        for i in range(mid, end):
+            row = order_v[0, i]
             right_D += D_v[row]
             right_C += C_v[row]
             if D_v[row] > 0.0:
@@ -451,32 +370,27 @@ def grow_depthwise_exact_c(
 
         # Append left and right child leaves to the tree.
         left_idx = tree.n_nodes_used
-        if left_idx >= tree.max_nodes:
+        if left_idx + 1 >= tree.max_nodes:
             raise RuntimeError(
                 f"GrowableFlatTree exhausted at {tree.max_nodes} nodes; "
                 "increase the per-fit cap."
             )
+        right_idx = left_idx + 1
         tree_feature[left_idx] = -1
         tree_value[left_idx] = left_alpha
         tree_D_sum[left_idx] = left_D
         tree_C_sum[left_idx] = left_C
         tree_n_orig[left_idx] = left_orig
+        tree_n_aug[left_idx] = n_left
         tree_depth[left_idx] = depth_v + 1
-        tree.n_nodes_used += 1
-
-        right_idx = tree.n_nodes_used
-        if right_idx >= tree.max_nodes:
-            raise RuntimeError(
-                f"GrowableFlatTree exhausted at {tree.max_nodes} nodes; "
-                "increase the per-fit cap."
-            )
         tree_feature[right_idx] = -1
         tree_value[right_idx] = right_alpha
         tree_D_sum[right_idx] = right_D
         tree_C_sum[right_idx] = right_C
         tree_n_orig[right_idx] = right_orig
+        tree_n_aug[right_idx] = n_right
         tree_depth[right_idx] = depth_v + 1
-        tree.n_nodes_used += 1
+        tree.n_nodes_used += 2
 
         # Convert the parent slot from leaf to internal.
         tree_feature[node_idx] = best_feat
@@ -486,7 +400,7 @@ def grow_depthwise_exact_c(
         tree_gain_v[node_idx] = best_gain
 
         # Push children. Append right first so .pop() processes left first
-        # (matches the existing Python recursion's DFS-left-first order).
+        # (matches the Python grower's depth-first, left-first order).
         worklist.append((right_idx, mid, end, depth_v + 1))
         worklist.append((left_idx, start, mid, depth_v + 1))
 

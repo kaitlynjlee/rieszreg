@@ -13,179 +13,61 @@ derivative to zero and using the identity ``h̃'(t) = t · h''(t)``:
     h''(α_ℓ) · (D_ℓ · α_ℓ + C_ℓ) = 0   ⇒   α_ℓ* = -C_ℓ / D_ℓ,
 
 with the value projected to the loss's α-domain when it falls outside.
-The leaf-loss-at-optimum value is ``L(α_ℓ*)``; the per-loss closed forms
-live in ``_LEAF_LOSS_DISPATCH`` below.
-
 The splitter sweeps each candidate split position and computes
 
     gain = L(α_p*) - L(α_ℓ*) - L(α_r*),
 
 picking the largest. ``min_orig_leaf`` constrains the count of original
 (``D > 0``) rows in each child.
+
+The per-loss closed forms for ``L(α*)`` and ``α*`` are written once, in
+:mod:`riesztree.fast._loss_kernels`; :func:`make_leaf_solvers` hands the
+same compiled kernels to the Python paths (leaf payloads, pruning, the
+categorical sweep), so split search and leaf values can't drift apart.
+A leaf loss is only defined up to a term linear in ``C_ℓ`` (the KL kernel
+uses ``h(t) = t log t - t`` where ``rieszreg.KLLoss`` uses ``t log t``);
+such a term cancels in every gain and in the pruning criterion, since
+``C_parent = C_left + C_right``.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from rieszreg import (
-    BernoulliLoss,
-    BoundedSquaredLoss,
-    KLLoss,
-    Loss,
-    SquaredLoss,
-)
+from rieszreg import Loss
+
+from .fast._loss_kernels import py_dispatch_alpha_at_opt, py_dispatch_leaf_loss
+from .fast._splitter import _lookup_user_kernel, loss_kind_for
 
 
 # ---------------------------------------------------------------------------
-# Leaf-loss-at-optimum, per Loss subclass.
-
-def _leaf_loss_squared(D: float, C: float) -> float:
-    """``h(t) = t²``; α* = -C/D unconditionally; L(α*) = -C²/D."""
-    if D <= 0.0:
-        return 0.0
-    return -C * C / D
-
-
-def _leaf_loss_kl(D: float, C: float) -> float:
-    """``h(t) = t log t - t`` on t > 0; α* = -C/D when C < 0.
-
-    L(α) = D·α + C·log α. At α* = -C/D > 0:
-        L(α*) = D·(-C/D) + C·log(-C/D) = -C + C·log(-C/D).
-
-    Boundary cases (α ≥ 0 required by the link domain):
-      - C = 0: L(α) = D·α has infimum 0 at α = 0+ (boundary value).
-      - C > 0: minimum unbounded below as α → ∞ would be wrong direction;
-        actually L'(α) = D + C/α > 0 for D > 0, C > 0, α > 0, so L is
-        increasing. Infimum at α = 0+ is C·(-∞) = -∞ — infeasible. Return
-        +∞ to disqualify this configuration as a child of a split.
-    """
-    if D <= 0.0:
-        return 0.0
-    if C == 0.0:
-        return 0.0
-    if C > 0.0:
-        return float("inf")
-    return -C + C * np.log(-C / D)
-
-
-def _leaf_loss_bernoulli(D: float, C: float) -> float:
-    """``h(t) = t log t + (1-t) log(1-t)`` on (0, 1); α* = -C/D when -D < C < 0.
-
-    Derivation: h'(t) = log(t/(1-t)); h̃(t) = -log(1-t).
-    L(α) = -D·log(1-α) + C·log(α/(1-α)). Setting L'(α) = 0 gives α = -C/D.
-    At α* = -C/D ∈ (0, 1) (i.e. -D < C < 0):
-        1 - α* = (D + C) / D
-        α*/(1-α*) = -C/(D+C)
-        L(α*) = -D·log((D+C)/D) + C·log(-C/(D+C))
-              = D·log D - (D+C)·log(D+C) + C·log(-C).
-
-    At C = -D, α* = 1 and L(α*) = 0 (the (D+C)·log(D+C) term is 0·log 0).
-    Outside [-D, 0): infeasible — return +∞.
-    """
-    if D <= 0.0:
-        return 0.0
-    if C == 0.0:
-        return 0.0
-    if not (-D <= C < 0.0):
-        return float("inf")
-    if C == -D:
-        return 0.0
-    return D * np.log(D) - (D + C) * np.log(D + C) + C * np.log(-C)
-
-
-def _leaf_loss_bounded_squared(D: float, C: float, lo: float, hi: float) -> float:
-    """``h(t) = t²`` on (lo, hi); α* = -C/D projected into [lo, hi].
-
-    Per-leaf loss L(α) = D·α² + 2C·α (as in SquaredLoss). Project
-    α* = -C/D into the interval and evaluate.
-    """
-    if D <= 0.0:
-        return 0.0
-    a_star = -C / D
-    if a_star < lo:
-        a_star = lo
-    elif a_star > hi:
-        a_star = hi
-    return D * a_star * a_star + 2.0 * C * a_star
-
-
-def _leaf_alpha_squared(D: float, C: float) -> float:
-    return 0.0 if D <= 0.0 else -C / D
-
-
-def _leaf_alpha_kl(D: float, C: float) -> float:
-    if D <= 0.0:
-        return 0.0
-    if C >= 0.0:
-        return 0.0  # boundary
-    return -C / D
-
-
-def _leaf_alpha_bernoulli(D: float, C: float) -> float:
-    if D <= 0.0:
-        return 0.5
-    a_star = -C / D
-    if a_star <= 0.0:
-        return 1e-6
-    if a_star >= 1.0:
-        return 1.0 - 1e-6
-    return a_star
-
-
-def _leaf_alpha_bounded_squared(D: float, C: float, lo: float, hi: float) -> float:
-    if D <= 0.0:
-        return 0.5 * (lo + hi)
-    a_star = -C / D
-    if a_star < lo:
-        return lo
-    if a_star > hi:
-        return hi
-    return a_star
-
+# Leaf-loss-at-optimum and α* per Loss.
 
 def make_leaf_solvers(loss: Loss):
     """Return ``(loss_at_optimum, alpha_at_optimum)`` callables for ``loss``.
 
     Both signatures: ``f(D: float, C: float) -> float``.
 
-    Built-in dispatch covers ``SquaredLoss``, ``KLLoss``,
-    ``BernoulliLoss``, ``BoundedSquaredLoss``. Custom losses can plug
-    in via :func:`riesztree.fast.register_fast_leaf_solver`, which
-    contributes both a Cython-callable leaf-loss kernel (used by
-    ``splitter='exact'``) and a Python ``alpha_at_opt`` callable
-    (consumed here for the leaf-payload computation). The registry is
-    checked first, as in :func:`riesztree.fast._splitter.loss_kind_for`,
-    so a registered subclass of a built-in uses the registered solver for
-    both split search and leaf values.
+    Built-in losses (``SquaredLoss``, ``KLLoss``, ``BernoulliLoss``,
+    ``BoundedSquaredLoss``) get the compiled kernels the split sweeps use.
+    A loss registered via :func:`riesztree.fast.register_fast_leaf_solver`
+    gets its registered pair; the registry is checked first, as in
+    :func:`riesztree.fast._splitter.loss_kind_for`, so a registered
+    subclass of a built-in uses the registered solver for both split search
+    and leaf values. Any other loss raises ``NotImplementedError``.
     """
-    # The registered cfunc is callable from Python too, so it serves the
-    # Python paths (pruning, leaf payloads).
-    from .fast._splitter import _lookup_user_kernel
     user_entry = _lookup_user_kernel(loss)
     if user_entry is not None:
         return user_entry
-    if isinstance(loss, SquaredLoss):
-        return _leaf_loss_squared, _leaf_alpha_squared
-    if isinstance(loss, KLLoss):
-        return _leaf_loss_kl, _leaf_alpha_kl
-    if isinstance(loss, BernoulliLoss):
-        return _leaf_loss_bernoulli, _leaf_alpha_bernoulli
-    if isinstance(loss, BoundedSquaredLoss):
-        lo = float(getattr(loss, "lo", 0.0))
-        hi = float(getattr(loss, "hi", 1.0))
-        loss_fn = lambda D, C, _lo=lo, _hi=hi: _leaf_loss_bounded_squared(D, C, _lo, _hi)
-        alpha_fn = lambda D, C, _lo=lo, _hi=hi: _leaf_alpha_bounded_squared(D, C, _lo, _hi)
-        return loss_fn, alpha_fn
+    kind, lo, hi, _ = loss_kind_for(loss)
 
-    raise NotImplementedError(
-        f"riesztree has no analytic leaf solver for loss type "
-        f"{type(loss).__name__}. Built-in support: SquaredLoss, KLLoss, "
-        "BernoulliLoss, BoundedSquaredLoss. To use a custom Loss subclass, "
-        "either extend riesztree.splitter.make_leaf_solvers or register "
-        "a Cython-callable kernel via "
-        "riesztree.fast.register_fast_leaf_solver(MyLoss, leaf_loss_cfunc, alpha_at_opt)."
-    )
+    def leaf_loss(D: float, C: float) -> float:
+        return py_dispatch_leaf_loss(kind, D, C, lo, hi)
+
+    def alpha_at_opt(D: float, C: float) -> float:
+        return py_dispatch_alpha_at_opt(kind, D, C, lo, hi)
+
+    return leaf_loss, alpha_at_opt
 
 
 # ---------------------------------------------------------------------------

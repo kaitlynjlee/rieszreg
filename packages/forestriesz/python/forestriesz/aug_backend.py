@@ -26,7 +26,7 @@ from joblib import Parallel, delayed
 from rieszreg import AugmentedDataset, FitResult, Loss
 from rieszreg.backends import resolve_column_positions
 from riesztree import RieszTreeBackend
-from riesztree.tree import check_categorical
+from riesztree.tree import check_features
 
 from .aug_predictor import AugForestPredictor
 
@@ -216,7 +216,7 @@ class AugForestRieszBackend:
     ) -> FitResult:
         del base_score  # forest leaves store loss-aware α directly.
         cat_feats = resolve_column_positions(self.categorical_features, None, "categorical_features")
-        check_categorical(aug_train.features, cat_feats)
+        check_features(aug_train.features, cat_feats)
 
         if not self.bootstrap and self.max_samples is not None:
             raise ValueError(

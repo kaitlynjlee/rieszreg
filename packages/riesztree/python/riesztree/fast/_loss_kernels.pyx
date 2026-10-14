@@ -9,12 +9,14 @@ Each loss is identified by an integer ``loss_kind`` (the ``LOSS_*``
 module constants). The two ``dispatch_*`` functions select among the
 inlined kernels via a switch — at -O2 the compiler typically inlines
 the chosen branch back into the caller, leaving no per-call dispatch
-cost. Phase 5 will add a Numba ``@cfunc`` registration path that
-replaces the switch with a function pointer when the user supplies a
-custom loss.
+cost. A custom loss registered via
+:func:`riesztree.fast.register_fast_leaf_solver` bypasses the switch with
+a function pointer.
 
-Math is identical to ``riesztree/splitter.py``'s ``make_leaf_solvers``
-dispatcher; this file is the C-speed mirror used by the Cython splitter.
+This file is the single home of the closed forms: the compiled split
+kernels ``cimport`` the dispatchers, and
+:func:`riesztree.splitter.make_leaf_solvers` hands the same kernels to the
+Python paths through ``py_dispatch_*``.
 """
 
 from libc.math cimport log, INFINITY, NAN, isfinite

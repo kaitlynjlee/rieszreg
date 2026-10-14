@@ -108,12 +108,32 @@ def test_non_integer_or_missing_category_codes_are_rejected():
     df = pd.DataFrame({"a": rng.integers(0, 2, 200).astype(float),
                        "g": rng.integers(0, 3, 200).astype(float)})
     est = RieszTreeRegressor(ATE(), categorical_features=(1,)).fit(df)
-    for bad in (1.5, np.nan):
+    for bad, match in ((1.5, "integer level codes"), (np.nan, "NaN")):
         df_bad = df.assign(g=df["g"].where(df.index != 0, bad))
-        with pytest.raises(ValueError, match="integer level codes"):
+        with pytest.raises(ValueError, match=match):
             RieszTreeRegressor(ATE(), categorical_features=(1,)).fit(df_bad)
-        with pytest.raises(ValueError, match="integer level codes"):
+        with pytest.raises(ValueError, match=match):
             est.predict(df_bad)
+
+
+def test_missing_continuous_features_are_rejected():
+    """Trees have no missing-value handling. A NaN covariate used to be
+    accepted: the compiled sort misplaced it, so a split's gain was computed
+    on a different ordering than the partition, and NaN rows always went
+    right. Fit and predict now raise instead. The check runs before the
+    splitter is chosen, so one splitter covers all of them."""
+    import pandas as pd
+    from riesztree import ATE, RieszTreeRegressor
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"a": rng.integers(0, 2, 300).astype(float),
+                       "x": rng.normal(size=300)})
+    est = RieszTreeRegressor(ATE(treatment="a")).fit(df)
+    df_bad = df.assign(x=df["x"].where(df.index % 7 != 0, np.nan))
+    with pytest.raises(ValueError, match="NaN"):
+        RieszTreeRegressor(ATE(treatment="a")).fit(df_bad)
+    with pytest.raises(ValueError, match="NaN"):
+        est.predict(df_bad)
 
 
 def test_categorical_features_accepts_column_names():

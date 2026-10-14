@@ -46,6 +46,23 @@ class BinMapper:
     subsample: int
 
 
+def _quantiles_of_sorted(sorted_col: np.ndarray, quantiles: np.ndarray) -> np.ndarray:
+    """``np.quantile(col, quantiles, method="linear")`` for an already-sorted
+    ``col``, without numpy's partition pass. Same virtual index
+    ``(n - 1)·q`` and the same two-sided lerp as numpy, so the result is
+    bit-identical (``tests/test_hist_splitter.py`` checks this)."""
+    n = sorted_col.size
+    virtual = (n - 1) * quantiles
+    lo = np.floor(virtual).astype(np.intp)
+    hi = np.minimum(lo + 1, n - 1)
+    gamma = virtual - lo
+    a, b = sorted_col[lo], sorted_col[hi]
+    diff = b - a
+    out = a + diff * gamma
+    np.subtract(b, diff * (1.0 - gamma), out=out, where=gamma >= 0.5)
+    return out
+
+
 def fit_bin_mapper(
     X: np.ndarray,
     max_bins: int = 255,
@@ -94,9 +111,11 @@ def fit_bin_mapper(
     # Internal quantiles only; the outer endpoints are implicit (-inf / +inf).
 
     for j in range(p):
-        col = X_sub[:, j]
+        # One sort serves both the distinct-value count and the quantiles
+        # (np.unique + np.quantile would sort / partition the column twice).
+        col = np.sort(X_sub[:, j])
         # Distinct value count caps the actual bins used.
-        uniques = np.unique(col)
+        uniques = col[np.concatenate(([True], col[1:] != col[:-1]))]
         if uniques.size <= max_bins:
             # Use midpoints between consecutive distinct values as
             # thresholds — gives exact bins for low-cardinality features.
@@ -107,7 +126,7 @@ def fit_bin_mapper(
                 thresholds = (uniques[:-1] + uniques[1:]) * 0.5
                 n_bins[j] = uniques.size
         else:
-            thresholds = np.quantile(col, quantiles, method="linear")
+            thresholds = _quantiles_of_sorted(col, quantiles)
             # Drop duplicate thresholds (low-cardinality feature with
             # heavy ties): sklearn's `_BinMapper` uses unique() too.
             thresholds = np.unique(thresholds)

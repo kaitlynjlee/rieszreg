@@ -117,8 +117,8 @@ def _resolve_fast_loss_args(splitter: str, loss) -> tuple[int, float, float, int
 
     Returns ``(loss_kind, bounded_lo, bounded_hi, user_cfunc_addr)``.
     Built-in losses map to their kernel id; user-registered losses map to
-    ``LOSS_USER_CFUNC`` with the registered address. Callers run
-    ``make_leaf_solvers`` first, which already rejects losses with no solver.
+    ``LOSS_USER_CFUNC`` with the registered address; any other loss raises
+    ``NotImplementedError`` from :func:`loss_kind_for`.
     """
     if splitter not in _VALID_SPLITTERS:
         raise ValueError(
@@ -137,15 +137,14 @@ def _resolve_fast_loss_args(splitter: str, loss) -> tuple[int, float, float, int
 # ---------------------------------------------------------------------------
 # Holdout-loss bookkeeping for early stopping.
 
-def _holdout_loss(root: Node, aug_valid, loss) -> float:
-    """Held-out mean Riesz loss of the tree rooted at ``root``."""
-    from .fast import flat_tree_from_node, predict_alpha as _flat_predict
-    return aug_valid.mean_loss(loss, _flat_predict(flat_tree_from_node(root), aug_valid.features))
-
-
 class _EarlyStopping:
     """Tracks held-out loss after each accepted split and rolls the tree back
-    to the best partial tree once ``rounds`` splits in a row fail to improve."""
+    to the best partial tree once ``rounds`` splits in a row fail to improve.
+
+    The held-out loss is kept incrementally: each validation row's loss term
+    and the leaf it sits in are stored, and a split re-routes and re-scores
+    only the rows of the leaf it splits. Rebuilding and re-predicting the
+    whole tree after every split would cost O(splits × (nodes + n_valid))."""
 
     def __init__(self, rounds: int | None, valid, loss):
         self.rounds, self.valid, self.loss = rounds, valid, loss
@@ -155,15 +154,38 @@ class _EarlyStopping:
         self.split_nodes: list[Node] = []
 
     def start(self, root: Node) -> None:
-        if self.active:
-            self.best_loss = _holdout_loss(root, self.valid, self.loss)
+        if not self.active:
+            return
+        rows = np.arange(self.valid.features.shape[0])
+        self._rows_in = {id(root): rows}       # validation rows per current leaf
+        self._terms = np.empty(rows.size)      # per-row loss term at the current α̂
+        self._score(root, rows)
+        self.best_loss = self._mean_loss()
 
-    def after_split(self, root: Node, node: Node) -> bool:
+    def _score(self, leaf: Node, rows: np.ndarray) -> None:
+        v = self.valid
+        self._terms[rows] = self.loss.aug_loss_alpha(
+            v.is_original[rows], v.potential_deriv_coef[rows], np.full(rows.size, leaf.alpha)
+        )
+
+    def _mean_loss(self) -> float:
+        return float(self._terms.sum() / self.valid.n_rows)
+
+    def after_split(self, node: Node) -> bool:
         """Record the split at ``node``; return True when growth should stop."""
         if not self.active:
             return False
         self.split_nodes.append(node)
-        cur = _holdout_loss(root, self.valid, self.loss)
+        rows = self._rows_in.pop(id(node))
+        x = self.valid.features[rows, node.split_feature]
+        if node.split_kind == "categorical":
+            goes_left = np.isin(x.astype(np.int64), node.split_left_levels)
+        else:
+            goes_left = x <= node.split_threshold
+        for child, child_rows in ((node.left, rows[goes_left]), (node.right, rows[~goes_left])):
+            self._rows_in[id(child)] = child_rows
+            self._score(child, child_rows)
+        cur = self._mean_loss()
         if cur < self.best_loss - 1e-12:
             self.best_loss = cur
             self.since_improve = 0
@@ -375,7 +397,7 @@ class _Grower:
             if best is None:
                 return
             left_idx, right_idx = self.split(node, *best)
-            if self.es.after_split(root, node):
+            if self.es.after_split(node):
                 stop = True
                 return
             _recurse(node.left, left_idx)
@@ -438,7 +460,7 @@ class _Grower:
             _, _, leaf, best = heapq.heappop(heap)
             left_idx, right_idx = self.split(leaf, *best)
             leaves_count += 1
-            if self.es.after_split(root, leaf):
+            if self.es.after_split(leaf):
                 break
             _push(leaf.left, left_idx)
             _push(leaf.right, right_idx)
