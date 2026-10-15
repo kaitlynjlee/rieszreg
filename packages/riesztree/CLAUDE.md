@@ -45,8 +45,7 @@ R-side mirrors this: R6 class `RieszTreeRegressor$new(estimand=, max_depth=, ...
 ## Run tests
 
 ```sh
-cd /Users/aschuler/Desktop/RieszReg/riesztree && \
-  /Users/aschuler/Desktop/RieszReg/.venv/bin/python -m pytest python/tests -v
+cd packages/riesztree && ../../.venv/bin/python -m pytest python/tests -v
 ```
 
 R parity:
@@ -83,7 +82,7 @@ The per-leaf optimum α* = -C/D is universal across the four built-in Bregman lo
 - `BernoulliLoss`: L(α*) = D·log D - (D+C)·log(D+C) + C·log(-C) when -D < C < 0; 0 at C = -D (α* = 1); +∞ otherwise.
 - `BoundedSquaredLoss(lo, hi)`: project α* into [lo, hi] and evaluate D·α*² + 2C·α*.
 
-The dispatcher lives in `splitter.make_leaf_solvers`. Custom Loss subclasses raise `NotImplementedError` with a clear message — extend the dispatcher there.
+The closed forms live once, in `fast/_loss_kernels.pyx`; `fast._splitter.loss_kind_for` maps a `Loss` to its kernel id, and `splitter.make_leaf_solvers` hands the same kernels to the Python paths. Unregistered custom Loss subclasses raise `NotImplementedError` pointing at `register_fast_leaf_solver`. The KL kernel uses h(t) = t log t − t where `rieszreg.KLLoss` uses t log t; leaf losses differ by C, which cancels in gains and in pruning.
 
 ### Backend Protocol choice
 
@@ -97,7 +96,7 @@ We implement `Backend.fit_augmented` (augmentation-style), not `MomentBackend.fi
 
 ### Predictor representation
 
-The tree is a Python class hierarchy (`tree.Node`); prediction walks the tree in pure Python. For n=10⁵ predictions × depth ~10 the dispatch overhead is tens of milliseconds, well below the splitter's cost. A flat-array representation could replace this once profiling justifies it.
+The tree is a Python class hierarchy (`tree.Node`), the source of truth for diagnostics, pruning and serialization. `RieszTreePredictor` builds a flat-array `FlatTree` on first predict and walks it in Cython; mutating the `Node` tree must call `invalidate_flat_tree()`.
 
 ### Reference parity
 

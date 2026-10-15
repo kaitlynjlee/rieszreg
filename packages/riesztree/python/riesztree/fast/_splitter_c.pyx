@@ -10,9 +10,11 @@ inner loop runs at C speed (no per-threshold Python attribute lookups,
 no per-call ``leaf_loss(...)`` Python function dispatch). The argsort
 + cumulative sums up front are still numpy calls (already fast).
 
-The function-pointer dispatch into the four built-in loss kernels lives
-in :mod:`_loss_kernels`. Custom user losses fall back to the Python
-splitter — see :mod:`riesztree.grow.best_split_at`.
+These per-node kernels serve the Python grower (leafwise growth,
+early stopping, ``max_features``, categoricals); plain depthwise fits use
+the whole-tree driver in :mod:`_grow_exact_c`. The dispatch into the four
+built-in loss kernels lives in :mod:`_loss_kernels`; a registered custom
+loss runs through :func:`best_split_continuous_user_c`.
 """
 
 import numpy as np

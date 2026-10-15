@@ -15,6 +15,7 @@ import numpy as np
 
 from rieszreg import (
     BernoulliLoss,
+    BoundedSquaredLoss,
     KLLoss,
     Loss,
     SquaredLoss,
@@ -122,9 +123,8 @@ def loss_kind_for(loss: Loss) -> tuple[int, float, float, int]:
 
     For built-ins ``user_addr`` is 0; for user-registered losses
     ``loss_kind`` is :data:`LOSS_USER_CFUNC` and ``user_addr`` is the
-    registered C-callable address (the other slots are unused). Callers
-    run :func:`riesztree.splitter.make_leaf_solvers` first, which rejects
-    any other loss.
+    registered C-callable address (the other slots are unused). Any other
+    loss raises ``NotImplementedError``.
 
     The user registry is checked first so that users can override
     built-in behaviour (e.g. plug in a faster KL kernel).
@@ -138,7 +138,15 @@ def loss_kind_for(loss: Loss) -> tuple[int, float, float, int]:
         return LOSS_KL, np.nan, np.nan, 0
     if isinstance(loss, BernoulliLoss):
         return LOSS_BERNOULLI, np.nan, np.nan, 0
-    return LOSS_BOUNDED_SQUARED, float(loss.lo), float(loss.hi), 0
+    if isinstance(loss, BoundedSquaredLoss):
+        return LOSS_BOUNDED_SQUARED, float(loss.lo), float(loss.hi), 0
+    raise NotImplementedError(
+        f"riesztree has no leaf solver for loss type {type(loss).__name__}. "
+        "Built-in support: SquaredLoss, KLLoss, BernoulliLoss, "
+        "BoundedSquaredLoss. To use a custom Loss subclass, register a "
+        "compiled kernel via riesztree.fast.register_fast_leaf_solver("
+        "MyLoss, leaf_loss_cfunc, alpha_at_opt)."
+    )
 
 
 def best_split_at_hist(

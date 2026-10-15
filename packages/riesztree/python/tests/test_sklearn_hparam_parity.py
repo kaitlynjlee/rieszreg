@@ -41,6 +41,29 @@ def test_resolve_max_features_rejects_bad_inputs(spec):
         _resolve_max_features(spec, 10)
 
 
+@pytest.mark.parametrize(
+    "params, match",
+    [
+        # Leaves with no original row: α̂ = 0 there, and the Riesz loss is
+        # unbounded below, so the split gain is meaningless.
+        (dict(min_samples_leaf=0), "min_samples_leaf"),
+        (dict(max_depth=-1), "max_depth"),
+        (dict(min_samples_split=1), "min_samples_split"),
+        (dict(min_weight_fraction_leaf=0.6), "min_weight_fraction_leaf"),
+        (dict(growth_policy="leafwise", max_leaf_nodes=1), "max_leaf_nodes"),
+        (dict(min_impurity_decrease=-1.0), "min_impurity_decrease"),
+        (dict(ccp_alpha=-1.0), "ccp_alpha"),
+        (dict(early_stopping_rounds=0), "early_stopping_rounds"),
+        # No held-out rows: early stopping used to be skipped silently.
+        (dict(early_stopping_rounds=5, validation_fraction=0.0), "no validation rows"),
+    ],
+)
+def test_invalid_hyperparameters_raise(params, match):
+    Z = _make_multi_x_df(n=200, p=3)
+    with pytest.raises(ValueError, match=match):
+        RieszTreeRegressor(estimand=ATE(treatment="a"), **params).fit(Z)
+
+
 def _make_multi_x_df(n=600, p=8, seed=0):
     """DGP with multiple informative features so `max_features='sqrt'`
     subsampling reliably finds positive-gain splits."""

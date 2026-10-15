@@ -72,6 +72,21 @@ def test_bin_mapper_high_cardinality_uses_quantiles():
     assert counts.max() <= 3 * counts.min()
 
 
+def test_quantiles_of_sorted_matches_numpy_bitwise():
+    """The binner reads quantiles off the column it already sorted; they must
+    equal np.quantile(method='linear') exactly, ties and all, so bin edges
+    (and hence fitted trees) don't depend on the shortcut."""
+    from riesztree.fast._binner import _quantiles_of_sorted
+
+    rng = np.random.default_rng(0)
+    q = np.linspace(0.0, 1.0, 256)[1:-1]
+    for m in (256, 257, 1000, 4099):
+        for col in (rng.normal(size=m), np.round(rng.normal(size=m), 1),
+                    rng.exponential(size=m) * 1e3, rng.integers(0, 300, m).astype(float)):
+            np.testing.assert_array_equal(
+                _quantiles_of_sorted(np.sort(col), q), np.quantile(col, q, method="linear"))
+
+
 def test_bin_mapper_max_bins_cap():
     rng = np.random.default_rng(0)
     X = rng.normal(0.0, 1.0, size=(2000, 3))

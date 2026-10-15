@@ -74,7 +74,7 @@ alpha_hat = est.predict(df)
 - **Cython prediction**: `predict` walks a flat-array tree (built once per fit) at C speed. The `Node` tree continues to back diagnostics, pruning, and serialization.
 - **Three Cython splitter paths**: `splitter="exact"` (default; per-feature threshold sweep), `splitter="hist"` (quantile-binned histogram, fastest at large `n`), `splitter="random"` (sklearn ExtraTrees-style; one uniform threshold per feature).
 - **Custom-loss extension hook**: `riesztree.fast.register_fast_leaf_solver(LossClass, leaf_loss_cfunc, alpha_at_opt)` plugs a Numba `@cfunc` (signature `float64(float64, float64)`) into the Cython exact splitter for any user `Loss` subclass.
-- **138 Python tests** covering decoupling, Backend Protocol, growth policies, pruning, early stopping, categorical, sklearn integration, save/load round-trip per estimand, KL on TSM, BoundedSquared clipping, leaf-self-parity, sklearn-style hyperparameter parity, flat-tree predict parity, Cython↔Python splitter parity, user-loss registration, histogram splitter parity, Cython-driver vs Python-grower histogram parity, fit/predict leaf-membership agreement on tied data, early-stopping rollback, random splitter, registry-over-built-in dispatch order, sklearn-style cost-complexity pruning path.
+- **Python tests** covering decoupling, Backend Protocol, growth policies, pruning, early stopping, categorical, sklearn integration, save/load round-trip per estimand, KL on TSM, BoundedSquared clipping, leaf-self-parity, sklearn-style hyperparameter parity, flat-tree predict parity, Cython↔Python splitter parity, user-loss registration, histogram splitter parity, Cython-driver vs Python-grower parity (exact and hist, every node field), fit/predict leaf-membership agreement on tied data, early-stopping rollback, random splitter, registry-over-built-in dispatch order, sklearn-style cost-complexity pruning path.
 
 ## Hyperparameters
 
@@ -102,7 +102,7 @@ alpha_hat = est.predict(df)
 
 | `splitter=` | When to use | Implementation |
 |---|---|---|
-| `"exact"` (default) | Most fits. Best partition; per-feature linear scan over distinct values. | Cython per-feature sweep with C-call dispatch into the Bregman leaf-loss kernels in `riesztree.fast._loss_kernels`. |
+| `"exact"` (default) | Most fits. Best partition; per-feature linear scan over distinct values. | Cython sweep with C-call dispatch into the Bregman leaf-loss kernels in `riesztree.fast._loss_kernels`. The depthwise driver sorts each feature once per tree and stable-partitions the sorted orders at every split (no per-node sort), holding one extra float64 copy and one int32 index per (augmented row, feature). |
 | `"hist"` | Large `n` (≥ 10⁵), or inside a forest where slight discretization is fine. | Quantile pre-binning (`max_bins`, default 255) once per fit; per-leaf histogram accumulation + sweep, all in Cython. |
 | `"random"` | ExtraTrees-style forests; cheap baseline. | One uniform threshold per feature per leaf; single Cython pass. |
 
@@ -159,6 +159,8 @@ The remaining ~1.35× to XGBoost at the largest cell is concentrated in the quan
 - **Constant per-leaf α only.** Linear-in-X leaves (model trees) and treatment-dimension sieves are documented as future work but not implemented.
 - **Covariate-only splits can have zero gain.** For ATE and TSM, a split on covariates alone leaves every leaf with the same α, so the tree must split on the treatment first. With small `max_features`, a node whose random draw holds no valid split searches the remaining features, as in sklearn.
 - **KL / Bernoulli + difference-of-evaluations estimands.** Splits that produce a leaf with `C > 0` (KL) or `C` outside `(-D, 0)` (Bernoulli) are disqualified. KL is intended for density-ratio estimands like `TSM`; pairing it with `ATE` will produce many disqualified splits.
+- **No missing values.** A `NaN` in any covariate raises at fit and at predict; impute or drop missing values first.
+- **Depthwise early stopping is depth-first.** Under `growth_policy="depthwise"` the rolled-back tree is the best prefix of a depth-first walk, so right-hand nodes near the root can stay unsplit. Use `growth_policy="leafwise"` to stop on the best-first sequence of splits.
 
 ## On the roadmap
 

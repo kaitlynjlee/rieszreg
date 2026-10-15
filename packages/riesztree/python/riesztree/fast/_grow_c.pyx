@@ -23,11 +23,10 @@ Cython worklist loop that:
   * Drives the worklist iteratively (no Python recursion). Stack
     depth limit no longer caps tree depth.
 
-Scope of v1: ``splitter='hist'`` + ``growth_policy='depthwise'`` +
-no categorical features + no early stopping + no max_features
-subsampling + built-in or user-registered loss. Other configurations
-keep the existing Python recursion in :mod:`riesztree.grow`. The
-dispatcher in ``grow.py`` decides at fit start which path to take.
+Scope: ``splitter='hist'`` + ``growth_policy='depthwise'`` + no
+categorical features + no early stopping + no max_features subsampling +
+built-in loss. Other configurations use the Python grower in
+:mod:`riesztree.grow` (``_Grower.compiled_eligible`` decides at fit start).
 """
 
 import numpy as np
@@ -47,7 +46,7 @@ cdef class GrowableFlatTree:
 
     Each node uses one slot across the parallel arrays. Internal nodes
     fill ``feature``, ``threshold``, ``left``, ``right``, ``gain``;
-    leaves fill ``value``, ``D_sum``, ``C_sum``, ``n_orig`` and have
+    leaves fill ``value``, ``D_sum``, ``C_sum``, ``n_orig``, ``n_aug`` and have
     ``feature[idx] == -1``. The same node is initialised as a leaf and
     later converted to internal via :meth:`convert_to_internal`.
     """
@@ -61,6 +60,7 @@ cdef class GrowableFlatTree:
         cnp.ndarray D_sum
         cnp.ndarray C_sum
         cnp.ndarray n_orig
+        cnp.ndarray n_aug
         cnp.ndarray gain
         cnp.ndarray depth
         Py_ssize_t n_nodes_used
@@ -76,6 +76,7 @@ cdef class GrowableFlatTree:
         self.D_sum = np.zeros(max_nodes, dtype=np.float64)
         self.C_sum = np.zeros(max_nodes, dtype=np.float64)
         self.n_orig = np.zeros(max_nodes, dtype=np.int64)
+        self.n_aug = np.zeros(max_nodes, dtype=np.int64)
         self.gain = np.zeros(max_nodes, dtype=np.float64)
         self.depth = np.zeros(max_nodes, dtype=np.int32)
         self.n_nodes_used = 0
@@ -83,7 +84,7 @@ cdef class GrowableFlatTree:
 
 cdef inline Py_ssize_t _add_leaf(
     GrowableFlatTree tree,
-    double D, double C, i64 n_orig_count, double alpha, int depth_v,
+    double D, double C, i64 n_orig_count, i64 n_aug_count, double alpha, int depth_v,
 ):
     cdef Py_ssize_t idx = tree.n_nodes_used
     if idx >= tree.max_nodes:
@@ -96,12 +97,14 @@ cdef inline Py_ssize_t _add_leaf(
     cdef f64[::1] D_v = tree.D_sum
     cdef f64[::1] C_v = tree.C_sum
     cdef i64[::1] n_v = tree.n_orig
+    cdef i64[::1] n_aug_v = tree.n_aug
     cdef i32[::1] depth_arr = tree.depth
     feat_v[idx] = -1
     val_v[idx] = alpha
     D_v[idx] = D
     C_v[idx] = C
     n_v[idx] = n_orig_count
+    n_aug_v[idx] = n_aug_count
     depth_arr[idx] = depth_v
     tree.n_nodes_used += 1
     return idx
@@ -367,7 +370,7 @@ def grow_depthwise_hist_c(
         if D_v[row] > 0.0:
             root_orig += 1
     root_alpha = dispatch_alpha_at_opt(loss_kind, root_D, root_C, bounded_lo, bounded_hi)
-    root_idx = _add_leaf(tree, root_D, root_C, root_orig, root_alpha, 0)
+    root_idx = _add_leaf(tree, root_D, root_C, root_orig, n_aug, root_alpha, 0)
 
     # Worklist entries: (node_idx, start, end, depth, slot_id_or_-1).
     # slot_id == -1 means "no parent_hist, allocate fresh" (root + PMS-skip).
@@ -461,8 +464,8 @@ def grow_depthwise_hist_c(
         right_alpha = dispatch_alpha_at_opt(loss_kind, right_D, right_C, bounded_lo, bounded_hi)
         threshold_v = float(bin_thresholds[best_feat][best_bin])
 
-        left_idx = _add_leaf(tree, left_D, left_C, left_orig, left_alpha, depth_v + 1)
-        right_idx = _add_leaf(tree, right_D, right_C, right_orig, right_alpha, depth_v + 1)
+        left_idx = _add_leaf(tree, left_D, left_C, left_orig, n_left, left_alpha, depth_v + 1)
+        right_idx = _add_leaf(tree, right_D, right_C, right_orig, n_right, right_alpha, depth_v + 1)
         _convert_to_internal(tree, node_idx, best_feat, threshold_v, gain_v, left_idx, right_idx)
 
         # Decide whether to use PMS for the children's histograms.

@@ -21,7 +21,7 @@ from rieszreg.backends import resolve_column_positions
 from .grow import _Grower
 from .predictor import RieszTreePredictor
 from .pruning import cost_complexity_prune
-from .tree import check_categorical
+from .tree import check_features
 
 
 @dataclass
@@ -109,6 +109,31 @@ class RieszTreeBackend:
     def _categorical_positions(self) -> tuple[int, ...]:
         return resolve_column_positions(self.categorical_features, None, "categorical_features")
 
+    def _check_params(self) -> None:
+        """Reject settings that would otherwise be silently ignored or fit a
+        wrong tree (sklearn's ranges, where the parameter has an sklearn twin).
+        ``min_samples_leaf < 1`` is the dangerous one: it admits leaves with
+        no original rows, where the Riesz loss is unbounded below."""
+        def _bad(name, rule):
+            raise ValueError(f"{name}={getattr(self, name)!r}; must be {rule}.")
+
+        if self.max_depth is not None and self.max_depth < 0:
+            _bad("max_depth", "None or an int >= 0")
+        if self.min_samples_split < 2:
+            _bad("min_samples_split", "an int >= 2")
+        if self.min_samples_leaf < 1:
+            _bad("min_samples_leaf", "an int >= 1 (every leaf needs an original row)")
+        if not 0.0 <= self.min_weight_fraction_leaf <= 0.5:
+            _bad("min_weight_fraction_leaf", "in [0, 0.5]")
+        if self.max_leaf_nodes is not None and self.max_leaf_nodes < 2:
+            _bad("max_leaf_nodes", "None or an int >= 2")
+        if self.min_impurity_decrease < 0:
+            _bad("min_impurity_decrease", ">= 0")
+        if self.ccp_alpha < 0:
+            _bad("ccp_alpha", ">= 0")
+        if self.early_stopping_rounds is not None and self.early_stopping_rounds < 1:
+            _bad("early_stopping_rounds", "None or an int >= 1")
+
     def fit_augmented(
         self,
         aug_train: AugmentedDataset,
@@ -121,9 +146,9 @@ class RieszTreeBackend:
         # Leaves store the loss-optimal α directly, so there is no boosting
         # offset: base_score (and hence `init`) has no effect on a tree.
         del base_score
-        check_categorical(aug_train.features, self._categorical_positions())
-        if aug_valid is not None:
-            check_categorical(aug_valid.features, self._categorical_positions())
+        for aug in (aug_train, aug_valid):
+            if aug is not None:
+                check_features(aug.features, self._categorical_positions())
         X_binned, mapper = self._bin(aug_train.features, random_state)
         return self._fit_binned(
             aug_train, aug_valid, loss,
@@ -156,8 +181,15 @@ class RieszTreeBackend:
                 f"growth_policy must be 'depthwise' or 'leafwise'; got "
                 f"{self.growth_policy!r}."
             )
+        self._check_params()
         unbounded = 2**31 - 1
         has_valid = aug_valid is not None and aug_valid.n_rows > 0
+        if self.early_stopping_rounds is not None and not has_valid:
+            raise ValueError(
+                "early_stopping_rounds is set but there are no validation rows "
+                "to stop on; fit through RieszTreeRegressor (which holds out "
+                "validation_fraction of the rows) or pass eval_set."
+            )
         cat_feats = self._categorical_positions()
         g = _Grower(
             aug_train.features, aug_train.is_original, aug_train.potential_deriv_coef, loss,
