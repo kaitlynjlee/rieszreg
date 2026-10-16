@@ -22,6 +22,7 @@ from typing import Any, Callable, ClassVar, Iterable
 
 import numpy as np
 import torch
+from sklearn.base import BaseEstimator
 
 from rieszreg import AugmentedDataset, FitResult, Loss, register_predictor_loader
 from rieszreg.losses import loss_from_spec
@@ -455,8 +456,8 @@ def _default_optimizer_factory(params):  # pragma: no cover - placeholder
     )
 
 
-@dataclass
-class TorchBackend:
+@dataclass(repr=False)
+class TorchBackend(BaseEstimator):
     """Neural-network Riesz regression backend (PyTorch).
 
     Implements ``rieszreg.Backend.fit_augmented``: groups the augmented rows

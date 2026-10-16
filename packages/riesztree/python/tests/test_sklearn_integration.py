@@ -59,3 +59,15 @@ def test_cross_val_predict(linear_gaussian_ate, covariate_keys):
     assert a_hat.shape == (600,)
     # Sanity: mean ≈ 0 (ATE Riesz averages to 0 in expectation).
     assert abs(float(np.mean(a_hat))) < 1.0
+
+
+def test_backend_fields_reachable_through_set_params():
+    """GridSearchCV tunes an explicit backend through backend__<field>, which
+    needs the backend's get_params / set_params."""
+    from rieszreg import RieszEstimator
+    from riesztree import RieszTreeBackend
+
+    est = RieszEstimator(estimand=ATE(), backend=RieszTreeBackend())
+    est.set_params(backend__max_depth=2)
+    assert est.backend.max_depth == 2
+    assert clone(est).backend.max_depth == 2

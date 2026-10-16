@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 import numpy as np
+from sklearn.base import BaseEstimator
 
 from rieszreg import AugmentedDataset
 from rieszreg.backends.base import FitResult
@@ -25,8 +26,8 @@ from .solvers import auto_choose, get_solver
 DEFAULT_LAMBDA_GRID = tuple(10.0 ** np.linspace(-4, 0, 21))
 
 
-@dataclass
-class KernelRidgeBackend:
+@dataclass(repr=False)
+class KernelRidgeBackend(BaseEstimator):
     """Kernel ridge regression backend for the rieszreg framework.
 
     Parameters
