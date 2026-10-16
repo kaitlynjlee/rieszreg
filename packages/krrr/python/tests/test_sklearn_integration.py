@@ -63,3 +63,15 @@ def test_cross_val_predict(binary_ate_data):
     oof = cross_val_predict(krr, df, cv=3)
     assert oof.shape == (len(df),)
     assert np.all(np.isfinite(oof))
+
+
+def test_backend_fields_reachable_through_set_params():
+    """GridSearchCV tunes an explicit backend through backend__<field>, which
+    needs the backend's get_params / set_params."""
+    from rieszreg import RieszEstimator
+    from krrr import KernelRidgeBackend
+
+    est = RieszEstimator(estimand=ATE(), backend=KernelRidgeBackend())
+    est.set_params(backend__validation_fraction=0.3)
+    assert est.backend.validation_fraction == 0.3
+    assert clone(est).backend.validation_fraction == 0.3

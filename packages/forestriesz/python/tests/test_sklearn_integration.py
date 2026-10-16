@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from sklearn.base import clone
 from sklearn.model_selection import GridSearchCV, cross_val_predict, KFold
 
@@ -67,3 +68,17 @@ def test_cross_val_predict_runs(logistic_tsm_df):
     pred = cross_val_predict(est, logistic_tsm_df, cv=cv, n_jobs=1)
     assert pred.shape == (len(logistic_tsm_df),)
     assert np.all(np.isfinite(pred))
+
+
+@pytest.mark.parametrize("backend_name", ["ForestRieszBackend", "AugForestRieszBackend"])
+def test_backend_fields_reachable_through_set_params(backend_name):
+    """GridSearchCV tunes an explicit backend through backend__<field>, which
+    needs the backend's get_params / set_params."""
+    import forestriesz
+    from rieszreg import RieszEstimator
+
+    backend = getattr(forestriesz, backend_name)()
+    est = RieszEstimator(estimand=ATE(), backend=backend)
+    est.set_params(backend__n_estimators=7)
+    assert est.backend.n_estimators == 7
+    assert clone(est).backend.n_estimators == 7

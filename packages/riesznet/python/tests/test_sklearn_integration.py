@@ -114,3 +114,15 @@ def test_cross_val_predict_runs(logistic_tsm_df):
     pred = cross_val_predict(est, logistic_tsm_df, cv=cv, n_jobs=1)
     assert pred.shape == (len(logistic_tsm_df),)
     assert np.all(np.isfinite(pred))
+
+
+def test_backend_fields_reachable_through_set_params():
+    """GridSearchCV tunes an explicit backend through backend__<field>, which
+    needs the backend's get_params / set_params."""
+    from rieszreg import RieszEstimator
+    from riesznet import TorchBackend
+
+    est = RieszEstimator(estimand=ATE(), backend=TorchBackend())
+    est.set_params(backend__epochs=7)
+    assert est.backend.epochs == 7
+    assert clone(est).backend.epochs == 7

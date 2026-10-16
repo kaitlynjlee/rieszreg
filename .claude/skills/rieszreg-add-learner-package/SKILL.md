@@ -43,6 +43,8 @@ The orchestrator dispatches at fit time based on which Protocol the backend expo
 
 Return a `Predictor` with `predict_eta()` and `predict_alpha()` (link applied). Inherit the base interface from rieszreg; storage format is your choice.
 
+Register a loader for the predictor's `kind` with `register_predictor_loader`, or `RieszEstimator.load` fails. DESIGN.md §B.2.1 has the full checklist of required and optional backend pieces, with what each optional one defaults to.
+
 ## 3. What you reuse from rieszreg (do not redefine)
 
 - **Estimands.** Import `Estimand`, `FiniteEvalEstimand`, and the five built-ins (`ATE`, `ATT`, `TSM`, `AdditiveShift`, `LocalShift`). New estimand factories that belong family-wide go in `rieszreg.estimands`, not your package.
@@ -57,6 +59,7 @@ Return a `Predictor` with `predict_eta()` and `predict_alpha()` (link applied). 
 - All learner-specific knobs (`n_estimators`, `learning_rate`, `epochs`, `kernel`, `lambda_grid`, `solver`, ...) live as constructor args on the concrete backend dataclass. **Never on `RieszEstimator`.** **Never in the Protocol method kwargs.**
 - Convenience subclasses surface them as their own `__init__` args and forward via `_resolved_backend()`.
 - If the backend uses a held-out slice for fit-time logic (early stopping, λ selection), expose `validation_fraction` as a constructor attribute and implement `holdout_fraction()` (the `HoldoutBackend` protocol in `rieszreg.backends`). It returns the fraction to hold out for this fit, or 0 when the fit won't use the holdout (e.g. early stopping off). The orchestrator calls `rieszreg.backends.holdout_fraction(backend)` and produces the row-level split before augmentation. Backends that don't use the holdout for fit-time logic implement neither. Subclass `sklearn.base.BaseEstimator` so `GridSearchCV` reaches backend fields through `backend__<field>`.
+- If a backend setting names input columns (e.g. `categorical_features`), implement `bind_columns(feature_keys)` (the `ColumnBackend` protocol): return a copy with names resolved to positions via `rieszreg.backends.resolve_column_positions`. The orchestrator calls it once per fit, after binding the estimand. Without it, such settings take positions only.
 - Tuning uses sklearn `GridSearchCV` / `HalvingGridSearchCV` / `RandomizedSearchCV`. **No bespoke `tune_riesz()`.**
 - Sample-splitting and cross-fitting use `cross_val_predict`. **No bespoke `crossfit()`.**
 - Heuristic resolutions (e.g. krrr's `median`, `scott`, `silverman` length-scale): document them and accept both string and numeric forms.
@@ -79,7 +82,7 @@ Lazy-import optional heavy deps (xgboost, lightgbm, JAX, keops, torch) via `__ge
 
 Mimic sklearn's serialization story as closely as possible — joblib-compatible pickling for the estimator object, plus a directory-format `save(path)` / `load(path)` that round-trips metadata cleanly.
 
-Implement directory-format save/load: binary payload (booster.ubj, predictor.joblib, kernel coefficients) + `metadata.json` with loss spec, estimand factory_spec, feature_keys, base_score, best_iteration, and `hyperparameters` (the estimator's constructor params). `load(path, estimand=None)` accepts a re-passed custom `m()` for the non-built-in case. Custom `m()` cannot be serialized in the metadata path; document as a limitation.
+The predictor's `save` writes its binary payload (booster.ubj, predictor.joblib, kernel coefficients), and the registered loader reads it back. `RieszEstimator.save` writes `metadata.json` with loss spec, estimand factory_spec, feature_keys, base_score, best_iteration, and `hyperparameters` (the estimator's constructor params). `load(path, estimand=None)` accepts a re-passed custom `m()` for the non-built-in case. Custom `m()` cannot be serialized in the metadata path; document as a limitation.
 
 ## 9. R wrapper (~50 lines)
 

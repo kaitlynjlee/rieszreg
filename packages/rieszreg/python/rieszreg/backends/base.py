@@ -24,7 +24,13 @@ cases; it calls ``fit_rows`` when a backend defines only that method and
 A backend that uses held-out rows (early stopping, λ selection) also
 implements ``HoldoutBackend.holdout_fraction``. The orchestrator splits off
 that fraction of rows before augmentation and passes them as the
-validation data.
+validation data. A backend whose settings name input columns (e.g.
+``categorical_features``) also implements ``ColumnBackend.bind_columns``,
+which the orchestrator calls once per fit to resolve the names. Both are
+optional; the "Adding a backend" docs page lists every piece a backend
+needs. DESIGN.md §B.2.1 records why the protocols are shaped this way: two
+optional hooks rather than one, and ``MomentBackend`` kept alongside
+``Backend``.
 
 Concrete backends live in implementation packages (rieszboost, krrr,
 forestriesz, ...).
