@@ -125,6 +125,8 @@ booster$diagnose(Z)$summary
 | `AdditiveShift(delta, ...)` | $\mu(a + \delta, x) - \mu(a, x)$ | Continuous-treatment shift effect — see [`rieszboost/examples/lee_schuler/continuous_dgp.py`](https://github.com/rieszreg/rieszreg/blob/main/packages/rieszboost/examples/lee_schuler/continuous_dgp.py). |
 | `LocalShift(delta, threshold, ...)` | $\mathbf{1}\{a < \text{threshold}\} \cdot (\mu(a + \delta, x) - \mu(a, x))$ | LASE *partial-estimand* surface; same caveat as ATT. |
 
+`ATE` and `ATT` need the treatment coded 0/1, with 1 for treated. `fit` raises on any other values, so recode the treatment before fitting.
+
 The R and Python factories take the same arguments.
 
 ::: {.panel-tabset group="lang"}
