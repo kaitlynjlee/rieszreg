@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 import numpy as np
+from sklearn.base import BaseEstimator
 
 from rieszreg import AugmentedDataset, Estimand, FitResult, Loss, SquaredLoss
 
@@ -39,8 +40,8 @@ def _per_row_moments(aug: AugmentedDataset, phi_fns: Sequence[Callable]) -> np.n
     ])
 
 
-@dataclass
-class ForestRieszBackend:
+@dataclass(repr=False)
+class ForestRieszBackend(BaseEstimator):
     """Random-forest Riesz regression backend.
 
     Wraps EconML's ``BaseGRF`` with the linear-moment criterion. Implements

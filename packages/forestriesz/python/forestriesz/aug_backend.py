@@ -22,6 +22,7 @@ from typing import Sequence
 
 import numpy as np
 from joblib import Parallel, delayed
+from sklearn.base import BaseEstimator
 
 from rieszreg import AugmentedDataset, FitResult, Loss
 from rieszreg.backends import resolve_column_positions
@@ -110,8 +111,8 @@ def _fit_one_tree(
     return fit.predictor
 
 
-@dataclass
-class AugForestRieszBackend:
+@dataclass(repr=False)
+class AugForestRieszBackend(BaseEstimator):
     """Augmentation-style random-forest Riesz backend.
 
     An ensemble of single-tree Riesz regressors fit on the augmented dataset

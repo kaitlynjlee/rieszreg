@@ -105,11 +105,27 @@ The `RieszEstimator` orchestrator is learner-agnostic. To run it with an algorit
 
 This is the end-user route: keep the wrapper in your own module, depend on `rieszreg`, ship nothing back. Contributing a learner package to the family adds a few requirements (R parity, the full conformance suite, in-tree tier placement) covered in [`DESIGN.md` Part B](https://github.com/rieszreg/rieszreg/blob/main/DESIGN.md).
 
+### Checklist
+
+A backend needs one fit method and a predictor with a registered loader. Everything else is optional: the orchestrator looks each optional method up by name and uses a default when it's missing, so add only what your learner needs.
+
+<!-- The same checklist is in DESIGN.md §B.2.1; change both together. -->
+
+| Piece | Needed? | Without it | Section |
+|---|---|---|---|
+| `fit_augmented` or `fit_rows` | Required, one of the two | — | [Pick an entry point](#pick-an-entry-point) |
+| A predictor with `kind`, `predict_eta`, `predict_alpha` and `save` | Required | — | [Minimum viable wrapper](#minimum-viable-wrapper) |
+| `register_predictor_loader(kind, loader)` at import | For `load` | `RieszEstimator.load` raises | [Save, load, conformance](#save-load-conformance) |
+| Subclass `BaseEstimator` and store constructor arguments unchanged | Recommended | `GridSearchCV` can't reach `backend__<field>` | [Sklearn composition](#sklearn-composition) |
+| Write the backend as a dataclass with JSON-serializable fields | Recommended | After `load`, the backend must be set again before refitting | [Save, load, conformance](#save-load-conformance) |
+| `holdout_fraction()` | For early stopping or λ selection | No rows are held out; only an `eval_set` gives validation data | [Sklearn composition](#sklearn-composition) |
+| `bind_columns(feature_keys)` | For settings that name columns | Those settings take positions only | [Column names in settings](#column-names-in-settings) |
+
 ### Pick an entry point
 
 Two Protocols live in `rieszreg.backends.base`. Each backend implements one.
 
-`Backend.fit_augmented(aug_train, aug_valid, loss, …)` is for learners whose loss decomposes naturally over augmented evaluation points. The orchestrator hands you an `AugmentedDataset` of pseudo-rows with `is_original` and `potential_deriv_coef` columns. The empirical Bregman-Riesz loss at $\alpha$ is the sum over augmented rows $r$ of $D_r\,\tilde h(\alpha(Z_r)) + C_r\,h'(\alpha(Z_r))$, where $D_r$ is `is_original` and $C_r$ is `potential_deriv_coef`. Reference learners using this entry point: kernel ridge (`KernelRidgeBackend`), gradient boosting (`XGBoostBackend`, `SklearnBackend`), random forests (`AugForestRieszBackend`), and neural nets (`TorchBackend`, which groups the augmented rows by `origin_index` to minibatch over original rows).
+`Backend.fit_augmented(aug_train, aug_valid, loss, …)` is for learners whose loss decomposes naturally over augmented evaluation points. The orchestrator hands you an `AugmentedDataset` of pseudo-rows with `is_original` and `potential_deriv_coef` columns. The empirical Bregman-Riesz loss at $\alpha$ is the sum over augmented rows $r$ of $D_r\,\tilde h(\alpha(Z_r)) + C_r\,h'(\alpha(Z_r))$, where $D_r$ is `is_original` and $C_r$ is `potential_deriv_coef`. Reference learners using this entry point: kernel ridge (`KernelRidgeBackend`), gradient boosting (`XGBoostBackend`, `SklearnBackend`), random forests (`AugForestRieszBackend`), single trees (`RieszTreeBackend`), and neural nets (`TorchBackend`, which groups the augmented rows by `origin_index` to minibatch over original rows).
 
 `MomentBackend.fit_rows(X_train, X_valid, estimand, loss, *, aug_train, aug_valid, …)` is for learners that fit on the original rows and need the estimand itself. You receive the original-row feature arrays (columns in `estimand.feature_keys` order), the estimand, and the same augmented datasets `fit_augmented` would get. The augmented rows give every evaluation point $a_j$ with coefficient $c_j = -C_r$ and the original row it came from (`origin_index`), so each row's moment is one vectorised group-by. Each row is a single training example to the learner. Reference learner using this entry point: the EconML-based random forest (`ForestRieszBackend`), which also reads the estimand to pick its basis functions.
 
@@ -122,6 +138,8 @@ Three pieces: a backend class implementing one Protocol method, a predictor clas
 #### Augmentation-style
 
 ```python
+from dataclasses import dataclass
+
 import numpy as np
 from sklearn.base import BaseEstimator
 from rieszreg.backends import (
@@ -151,11 +169,11 @@ class MyLearnerPredictor:
         return cls(params=params, base_score=base_score, loss=loss)
 
 
+@dataclass(repr=False)
 class MyLearnerBackend(BaseEstimator):
     """Augmentation-style wrapper around `my_learner_fit`."""
 
-    def __init__(self, regularization=1.0):
-        self.regularization = regularization
+    regularization: float = 1.0
 
     def fit_augmented(self, aug_train, aug_valid, loss,
                       *, base_score, random_state):
@@ -180,9 +198,9 @@ register_predictor_loader("my-learner", MyLearnerPredictor.load)
 Replace `fit_augmented` with `fit_rows`. The predictor stays the same.
 
 ```python
-class MyMomentBackend:
-    def __init__(self, learning_rate=1e-3):
-        self.learning_rate = learning_rate
+@dataclass(repr=False)
+class MyMomentBackend(BaseEstimator):
+    learning_rate: float = 1e-3
 
     def fit_rows(self, X_train, X_valid, estimand, loss,
                  *, aug_train, aug_valid, base_score, random_state):
@@ -214,7 +232,7 @@ from rieszreg.testing.dgps import linear_gaussian_ate
 dgp = linear_gaussian_ate()
 df = dgp.sample(n=2000, rng=np.random.default_rng(0))
 Z = df[["a", "x"]]
-y = df["y"]
+y = df["x"] + 2 * df["a"] + np.random.default_rng(1).normal(size=len(df))  # an outcome
 
 est = RieszEstimator(
     estimand=ATE(treatment="a", covariates=("x",)),
@@ -232,9 +250,9 @@ print(f"Pearson(α̂, α₀) = {np.corrcoef(alpha_hat, alpha_true)[0, 1]:.3f}")
 
 ### Sklearn composition
 
-`RieszEstimator` already inherits from `sklearn.base.BaseEstimator`. Subclass `BaseEstimator` in your backend too. It gives the backend `get_params` and `set_params`, which `GridSearchCV` needs to reach backend settings. Composition with `cross_val_predict`, `GridSearchCV`, `clone`, and `Pipeline` works as long as the wrapper plays by sklearn's two structural rules.
+`RieszEstimator` already inherits from `sklearn.base.BaseEstimator`. Subclass `BaseEstimator` in your backend too. It gives the backend `get_params` and `set_params`, which `GridSearchCV` needs to reach backend settings. The examples on this page are dataclasses, so `save` keeps their settings; `repr=False` keeps sklearn's printed form rather than the dataclass one. Composition with `cross_val_predict`, `GridSearchCV`, `clone`, and `Pipeline` works as long as the wrapper plays by sklearn's two structural rules.
 
-**The constructor stores its arguments by name without modification.** `MyLearnerBackend.__init__` writes `self.regularization = regularization` and stops. No coercion, no validation, no derived attributes. `clone(MyLearnerBackend(regularization=0.1))` then returns a fresh equivalent object, which sklearn relies on between folds.
+**The constructor stores its arguments by name without modification.** The `__init__` that `@dataclass` writes for `MyLearnerBackend` sets `self.regularization = regularization` and stops. If you write `__init__` yourself, do the same: no coercion, no validation, no derived attributes. `clone(MyLearnerBackend(regularization=0.1))` then returns a fresh equivalent object, which sklearn relies on between folds.
 
 **Fit-time state lives on the predictor, not on the backend.** The backend stays clone-clean across folds; fitted parameters live on the `Predictor` returned in `FitResult`, attached to `est.predictor_` after `fit`.
 
@@ -262,10 +280,10 @@ print(grid.best_params_)
 If your backend uses held-out rows for fit-time logic such as early stopping or regularization-path selection, add a `holdout_fraction()` method. It returns the fraction of rows to hold out for this fit, or 0 when the fit won't use them. The orchestrator calls it, splits the rows before augmentation, and passes the held-out part as `aug_valid`:
 
 ```python
+@dataclass(repr=False)
 class MyEarlyStoppingBackend(BaseEstimator):
-    def __init__(self, early_stopping_rounds=None, validation_fraction=0.1):
-        self.early_stopping_rounds = early_stopping_rounds
-        self.validation_fraction = validation_fraction
+    early_stopping_rounds: int | None = None
+    validation_fraction: float = 0.1
 
     def holdout_fraction(self):
         # Hold rows out only when early stopping will use them.
@@ -274,11 +292,33 @@ class MyEarlyStoppingBackend(BaseEstimator):
 
 An `eval_set` passed to `fit` replaces the split. A backend without the method gets no holdout, whatever attributes it has. Backends that compute their own internal CV or that don't need a holdout define neither.
 
+### Column names in settings
+
+If a backend setting names input columns, such as a list of categorical columns, add a `bind_columns(feature_keys)` method. It returns a copy of the backend with the names resolved to positions in `feature_keys`, the column order α̂ reads (treatment first). The orchestrator calls it once per fit and fits the copy, so the user's backend keeps the names. `rieszreg.backends.resolve_column_positions` does the lookup and also accepts 0-based positions:
+
+```python
+from dataclasses import dataclass, replace
+
+from rieszreg.backends import resolve_column_positions
+
+@dataclass(repr=False)
+class MyCategoricalBackend(BaseEstimator):
+    categorical_features: tuple = ()
+
+    def bind_columns(self, feature_keys):
+        return replace(self, categorical_features=resolve_column_positions(
+            self.categorical_features, feature_keys, "categorical_features"))
+```
+
+A backend without the method gets its settings unchanged, so they must be positions.
+
 ### Save, load, conformance
 
 `RieszEstimator.save(path)` writes `metadata.json` (loss spec, estimand factory_spec, base_score, your `predictor.kind`) and calls `predictor.save(dir_path)` for the binary payload. `RieszEstimator.load(path)` reads the metadata and looks up your registered predictor loader by `kind`. Built-in estimands round-trip automatically; custom estimands require `RieszEstimator.load(path, estimand=...)` so the user's $m$ is back in scope.
 
 Run `register_predictor_loader("my-learner", MyLearnerPredictor.load)` at the top level of your wrapper module so `import my_wrapper` registers the loader.
+
+`save` also stores the backend's settings when the backend is a dataclass whose fields are all JSON-serializable. Otherwise the loaded estimator predicts as usual, but refitting it raises until you pass the backend again with `set_params(backend=...)`.
 
 `rieszreg.testing.conformance` ships small helpers (`assert_clone_roundtrip`, `assert_get_params_round_trip`) that verify the load-bearing sklearn properties on your wrapper:
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import numpy as np
+from sklearn.base import BaseEstimator
 
 from rieszreg import AugmentedDataset, FitResult, Loss
 from rieszreg.backends import resolve_column_positions
@@ -24,8 +25,8 @@ from .pruning import cost_complexity_prune
 from .tree import check_features
 
 
-@dataclass
-class RieszTreeBackend:
+@dataclass(repr=False)
+class RieszTreeBackend(BaseEstimator):
     """Single-tree backend for the augmentation-style entry point.
 
     Hyperparameters mirror :class:`sklearn.tree.DecisionTreeRegressor`

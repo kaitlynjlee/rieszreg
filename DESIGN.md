@@ -231,6 +231,21 @@ This is the contract every implementation package must meet. Section structure f
 ## 2. Computational architecture
 
 ### 2.1 Backend Protocol
+
+**Checklist.** A backend needs one fit method and a predictor that can be saved and loaded. Everything else is optional: the orchestrator looks each optional method up by name and uses a default when it's missing, so implement only the ones your learner needs. All the names below are in `rieszreg.backends`.
+
+| Piece | Required? | What it does | Without it | Built-in examples |
+|---|---|---|---|---|
+| `fit_augmented` (`Backend`) or `fit_rows` (`MomentBackend`) | One of the two | Fits α̂ and returns a `FitResult` | — | `fit_rows`: `ForestRieszBackend` only; `fit_augmented`: the other six |
+| A predictor: `kind`, `predict_eta`, `predict_alpha` (link applied), `save(dir_path)` | Yes | Predicts α̂ and writes its own payload; `RieszEstimator.save` writes `metadata.json` | — | every backend |
+| `register_predictor_loader(kind, loader)` at import, with `loader(dir_path, *, base_score, loss, best_iteration) -> Predictor` | For `load` | Lets `RieszEstimator.load` rebuild the predictor | `load` raises "No loader registered" | each package, next to its predictor class |
+| `holdout_fraction() -> float` (`HoldoutBackend`) | Optional | The fraction of rows to hold out for this fit (early stopping, λ selection), or 0 when it won't use them | No rows are held out; `aug_valid` comes only from `eval_set` | `XGBoostBackend`, `SklearnBackend`, `KernelRidgeBackend`, `TorchBackend`, `RieszTreeBackend` |
+| `bind_columns(feature_keys)` (`ColumnBackend`) | Optional | Returns a copy with column names in settings like `categorical_features` resolved to positions (use `resolve_column_positions`) | Those settings take positions only | `RieszTreeBackend`, `AugForestRieszBackend` |
+| A dataclass whose constructor args are its settings | Recommended | `RieszEstimator.save` writes the backend's settings when every field is JSON-serializable | After `load`, the backend is a placeholder the user must set before refitting | every backend |
+| Subclass `sklearn.base.BaseEstimator` (with `@dataclass(repr=False)`) | Recommended | `GridSearchCV` reaches backend fields as `backend__<field>` | `backend__<field>` raises `AttributeError`; only whole backends can be searched over | every backend |
+
+The same table is on the docs site's [Adding a backend](docs/backends/index.qmd) page; change both together. §A.2 explains why `holdout_fraction` and `bind_columns` live on the backend rather than on `RieszEstimator`. The details of each fit method follow.
+
 - **[your package]** Implement *at least one* of two Protocols from `rieszreg.backends.base`. Both return `FitResult(predictor, best_iteration, best_score, history)`. Pick whichever fits your learner's natural loss decomposition:
   - `Backend.fit_augmented(aug_train, aug_valid, loss, ...)` — for learners that fit directly on the augmented `(a, b)` evaluation points (kernel ridge, gradient boosting, trees, neural nets). Implementations: `KernelRidgeBackend` (krrr), `XGBoostBackend` / `SklearnBackend` (rieszboost), `RieszTreeBackend` (riesztree), `AugForestRieszBackend` (forestriesz), `TorchBackend` (riesznet).
   - `MomentBackend.fit_rows(X_train, X_valid, estimand, loss, *, aug_train, aug_valid, ...)` — for learners that fit on the original sample rows and use the augmentation only to form per-row moments (the EconML-based random forest). `X_train` / `X_valid` are float arrays with columns in `estimand.feature_keys` order; `aug_train` / `aug_valid` are their augmentations (outcome included), which such backends group by `origin_index`. The `estimand` argument is a `FiniteEvalEstimand`. Implementation: `ForestRieszBackend` (forestriesz).
@@ -288,7 +303,7 @@ This is the contract every implementation package must meet. Section structure f
 ### 3.5 Serialization & persistence
 - **[design rule]** Mimic sklearn's serialization story as closely as possible — joblib-compatible pickling for the estimator object, plus a directory-format `save(path)` / `load(path)` that round-trips metadata cleanly.
 - **[from rieszreg]** `factory_spec` registry for built-in estimands and `loss_from_spec(spec)` for losses are inherited.
-- **[your package]** Implement directory-format save/load: binary payload (booster.ubj, predictor.joblib, kernel coefficients) + `metadata.json` with loss spec, estimand factory_spec, feature_keys, base_score, best_iteration, and `hyperparameters` (the estimator's constructor params). `load(path, estimand=None)` accepts a re-passed custom `m()` for the non-built-in case.
+- **[your package]** The predictor's `save` writes its binary payload (booster.ubj, predictor.joblib, kernel coefficients), and the loader registered for its `kind` reads it back (§2.1). `RieszEstimator.save` writes `metadata.json` with loss spec, estimand factory_spec, feature_keys, base_score, best_iteration, and `hyperparameters` (the estimator's constructor params). `load(path, estimand=None)` accepts a re-passed custom `m()` for the non-built-in case.
 - **[design rule]** Custom `m()` cannot be serialized in the metadata path; document as a limitation.
 
 ### 3.6 Data-flow conventions
