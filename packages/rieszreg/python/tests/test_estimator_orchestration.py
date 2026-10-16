@@ -6,6 +6,8 @@ plumbing, score) without depending on a heavyweight backend like xgboost.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -268,16 +270,17 @@ def test_clone_preserves_custom_estimand_subclass_and_loss():
         (scaled_tsm(), BernoulliLoss(), True),                  # α₀ = 0.1·1[a=1]/π
     ],
 )
-def test_fit_rejects_losses_that_cannot_represent_alpha(estimand, loss, ok):
-    """A loss whose α-range excludes the true α would otherwise fit a
-    constant stuck at the edge of the range."""
+def test_fit_warns_for_losses_that_cannot_represent_alpha(estimand, loss, ok):
+    """A loss whose α-range excludes the true α gives a fit stuck at the edge
+    of the range. fit warns, and still fits."""
     df, _ = _binary_df()
     est = RieszEstimator(estimand=estimand, backend=_StubBackend(), loss=loss)
-    if ok:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         est.fit(df)
-    else:
-        with pytest.raises(ValueError, match="Use SquaredLoss"):
-            est.fit(df)
+    flagged = any("pinned at its edge" in str(w.message) for w in caught)
+    assert flagged is not ok
+    assert hasattr(est, "predictor_")
 
 
 def test_fit_rejects_unidentified_designs():

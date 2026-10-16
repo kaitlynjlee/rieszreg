@@ -15,8 +15,9 @@ class KLLoss(Loss):
     With η = log(α), gradient (η) = D · exp(η) + C = D · α + C.
     Hessian (η) = D · exp(η) = D · α (floored).
 
-    Pair with density-ratio estimands (TSM, IPSI). For ATE-style estimands,
-    whose α takes negative values, fit raises.
+    Pair with density-ratio estimands (TSM, IPSI), whose α is positive. Choose
+    a loss whose range holds the estimand's α: where α₀ ≤ 0, the fit is pinned
+    near 0. For ATE-style estimands, whose α takes negative values, fit warns.
     """
 
     name = "kl"

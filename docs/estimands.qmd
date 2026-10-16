@@ -374,7 +374,7 @@ booster = RieszBooster(estimand=TSM(level=1), init=2.5) # informed prior
 ```
 
 ::: {.callout-note title="Boundary cases"}
-$\bar m$ is the mean of the true α. When it lies outside the loss's α-range (for example $\bar m = 1$ for `TSM` under `BernoulliLoss`), no α̂ in that range can be right, and `fit` raises. See [Losses](losses.qmd).
+$\bar m$ is the mean of the true α. When it lies outside the loss's α-range (for example $\bar m = 1$ for `TSM` under `BernoulliLoss`), no α̂ in that range can be right, and `fit` warns. See [Losses](losses.qmd).
 :::
 
 ## Estimand subclass taxonomy and future work

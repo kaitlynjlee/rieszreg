@@ -17,9 +17,9 @@ class BernoulliLoss(Loss):
     Gradient (η) = D · α + C,  Hessian (η) = D · α (1 − α).
 
     Use when α₀ is known to lie in (0, 1) by problem structure (e.g.
-    OutcomeRegNormSq with a binary outcome, or a scaled TSM). Fit raises when
-    α₀ takes negative values or its mean E[m(Z, 1)] is outside (0, 1). Where
-    only part of α₀ exceeds 1, the sigmoid saturates there with no warning.
+    OutcomeRegNormSq with a binary outcome, or a scaled TSM). Fit warns when
+    the mean of α₀, E[m(Z, 1)], is outside (0, 1). Where only part of α₀ is
+    outside (0, 1), the sigmoid saturates there with no warning.
     """
 
     name = "bernoulli"
