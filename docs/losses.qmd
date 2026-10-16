@@ -31,12 +31,16 @@ The "Potential $h$" column is $h$ in α-space — the function the user passes a
 | `BernoulliLoss` | $\alpha \log \alpha + (1-\alpha)\log(1-\alpha)$ | $\eta\,\sigma(\eta) - \log(1+e^\eta)$ | $(0, 1)$ | $\alpha_0$ known to lie in $(0, 1)$. |
 | `BoundedSquaredLoss(lo, hi)` | $\alpha^2$ | $\big(\mathrm{lo}+(\mathrm{hi}-\mathrm{lo})\sigma(\eta)\big)^2$ | $(\mathrm{lo}, \mathrm{hi})$ | Squared-loss fit with prior bounds (e.g. trimmed-propensity ratios). |
 
-The loss must be able to represent the true α. The mean of α is known from the data, $E[\alpha_0] = E[m(Z, 1)]$, and `fit` raises when that mean lies outside the loss's range, since α can't then stay inside it:
+### Choosing a loss for your estimand
 
-- **`ATE`, `ATT`, `AdditiveShift` and `LocalShift`** have mean 0, because their functional subtracts, e.g. $\alpha(0, x)$ in `ATE`. So their α takes negative values, and `KLLoss`, `BernoulliLoss` and `BoundedSquaredLoss` with `lo ≥ 0` can't fit them.
-- **`TSM`** has mean 1, so `BernoulliLoss` can't fit it.
+Pick a loss whose α-range contains the true α of your estimand. Where α leaves the range, the fit is pinned at the edge of it, and α̂ is wrong there. `SquaredLoss` has no range limit, so it fits every estimand; use one of the others only when you know α stays inside its range, for example α > 0 for a density ratio under `KLLoss`.
 
-The mean can lie inside the range while α leaves it somewhere. `fit` warns when some rows enter the functional with a negative coefficient, such as rows with $y < 0$ under `OutcomeRegNormSq`, because α may then be negative where the loss keeps it above 0.
+`fit` can check one thing from the data: the mean of α, $E[\alpha_0] = E[m(Z, 1)]$. When that mean lies outside the loss's range, α can't stay inside it, and `fit` warns before fitting. It still fits, so you can go ahead with that loss if you mean to:
+
+- **`ATE`, `ATT`, `AdditiveShift` and `LocalShift`** have mean 0, because their functional subtracts, e.g. $\alpha(0, x)$ in `ATE`. So their α takes negative values, and under `KLLoss`, `BernoulliLoss` or `BoundedSquaredLoss` with `lo ≥ 0`, α̂ is pinned at the lower edge wherever α is negative. Some learners return α̂ ≡ 0 everywhere, for example `RieszBooster` for `ATE` under `KLLoss`.
+- **`TSM`** has mean 1, so under `BernoulliLoss` the fit is pinned at 1.
+
+The mean can lie inside the range while α leaves it somewhere, for example `TSM` under `BoundedSquaredLoss(0, 3)` when some propensities are below 1/3. `fit` can't detect that, because it depends on α itself, so check that the range you pick holds the values you expect α to take.
 
 Among the built-in estimands, only `OutcomeRegNormSq` with a binary outcome has α in $(0, 1)$: there α is $P(Y = 1 \mid X)$. Otherwise `BernoulliLoss` is for custom estimands.
 

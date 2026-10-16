@@ -329,7 +329,7 @@ The splitter uses the analytic per-leaf-loss-at-optimum for each Bregman loss:
 | `BernoulliLoss` | $-D_\ell < C_\ell < 0$ | $D_\ell \log D_\ell - (D_\ell + C_\ell) \log(D_\ell + C_\ell) + C_\ell \log(-C_\ell)$ |
 | `BoundedSquaredLoss(lo, hi)` | always (project $\alpha_\ell^*$ to $[lo, hi]$) | $D_\ell (\alpha_\ell^*)^2 + 2 C_\ell \alpha_\ell^*$ |
 
-Out-of-domain children are disqualified (`+∞` leaf loss). `fit` rejects `KLLoss` / `BernoulliLoss` with estimands whose α takes negative values (`ATE`, `ATT`, shifts); see [Losses](../losses.qmd).
+Out-of-domain children are disqualified (`+∞` leaf loss). `fit` warns when `KLLoss` / `BernoulliLoss` is paired with an estimand whose α takes negative values (`ATE`, `ATT`, shifts); see [Losses](../losses.qmd).
 
 ```{python}
 from riesztree import RieszTreeRegressor, TSM

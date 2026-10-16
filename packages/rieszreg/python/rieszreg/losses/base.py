@@ -302,35 +302,56 @@ class Loss:
         return (-np.inf, np.inf)
 
     def check_estimand(self, aug, estimand) -> None:
-        """Raise if the estimand's α can't lie in this loss's α-range, which
-        would otherwise give a fit stuck at the edge of the range; warn when
-        the data suggest α leaves the range somewhere.
+        """Warn when the estimand's α can't lie in this loss's α-range. The
+        fit still runs, but it is pinned at the edge of the range.
 
         E[α₀] = E[m(Z, 1)] = m̄ (the Riesz identity at g ≡ 1), so α₀ can't stay
         inside (lo, hi) when m̄ is outside it. That covers ATE, ATT and the
-        shifts, whose m̄ is 0, under any loss that keeps α above 0.
+        shifts, whose m̄ is 0, under any loss that keeps α above 0. Whether α
+        leaves the range somewhere while m̄ stays inside depends on α itself,
+        so it isn't checked.
         """
+        # Why this warns, and why it checks only the mean (decided Oct 2026).
+        # Users don't give the form of α, so whether α₀ stays inside a loss's
+        # range is usually unknown before fitting: it depends on α₀ itself.
+        # Choosing a loss whose range holds α₀ is the user's job, documented
+        # in docs/losses.qmd ("Choosing a loss for your estimand"). The mean
+        # is the one thing the data settle: m̄ is exact, so apart from the
+        # known gap below, this warning doesn't fire on a fit that could be
+        # right.
+        # - Warn, don't raise: errors about a quantity the user never wrote
+        #   down confuse more than they help, and a user may still choose to
+        #   fit with this loss. #66 raised here.
+        # - Keep a message rather than none (the state before #66): without
+        #   one these fits fail silently. ATE under KLLoss gives α̂ ≡ 0 with
+        #   RieszBooster, RieszTreeRegressor and AugForestRieszRegressor, so
+        #   the ATE estimate is 0.
+        # - Nothing beyond the mean. #66 also warned when any row entered the
+        #   functional with a positive C (a negative coefficient). That guessed
+        #   from signs, not α: it fired on valid fits (OutcomeRegNormSq under
+        #   KLLoss, E[Y | X] > 0 but some y < 0) and missed real problems
+        #   (TSM under BoundedSquaredLoss(0, 3) pinned 7% of treated
+        #   predictions at 3, silently).
+        # - Not done: an after-fit check for α̂ piling up at an edge of the
+        #   range. It would catch the BoundedSquaredLoss case, but needs a
+        #   tolerance for "at the edge", which has no obvious scale for
+        #   KLLoss's bound at 0.
+        # - Known gap: for estimands that read y (OutcomeRegNormSq), m̄ is a
+        #   sample mean, so sampling noise alone can trigger the warning when
+        #   E[α₀] sits near an edge of the range.
         lo, hi = self.alpha_domain
-        loss, name = type(self).__name__, estimand.name
         m_bar = aug.m_bar + 0.0  # + 0.0 turns -0.0 into 0.0 for the message
-        if not lo < m_bar < hi:
-            msg = (
-                f"{loss} keeps α in ({lo:g}, {hi:g}), but the mean of {name}'s α "
-                f"is {m_bar:.3g}, so α can't stay inside that range."
-            )
-            if lo >= 0 and m_bar <= 0:
-                msg += (" Its functional subtracts (e.g. α(0, x) in ATE), so α "
-                        "takes negative values.")
-            raise ValueError(msg + " Use SquaredLoss.")
-        if lo >= 0 and (aug.potential_deriv_coef > 0).any():
-            warnings.warn(
-                f"{loss} keeps α above {lo:g}, but some rows enter {name}'s "
-                "functional with a negative coefficient (for OutcomeRegNormSq, "
-                "rows with y < 0), so α may be negative somewhere. Where it is, "
-                f"the fit can only reach {lo:g}; SquaredLoss has no such limit.",
-                UserWarning,
-                stacklevel=3,
-            )
+        if lo < m_bar < hi:
+            return
+        msg = (
+            f"{type(self).__name__} keeps α in ({lo:g}, {hi:g}), but the mean of "
+            f"{estimand.name}'s α is {m_bar:.3g}, so α can't stay inside that "
+            "range and the fit will be pinned at its edge."
+        )
+        if lo >= 0 and m_bar <= 0:
+            msg += (" Its functional subtracts (e.g. α(0, x) in ATE), so α "
+                    "takes negative values.")
+        warnings.warn(msg + " SquaredLoss has no range limit.", UserWarning, stacklevel=3)
 
     # ---- Round-trip ----
 

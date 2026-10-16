@@ -94,7 +94,7 @@ alpha_hat = est.predict(df_tsm)
 print(f"alpha_hat range: [{alpha_hat.min():.3f}, {alpha_hat.max():.3f}]")
 ```
 
-`KLLoss` and `BernoulliLoss` reject `ATE` / `ATT` / shift-style estimands at fit time, because their α takes negative values. `BoundedSquaredLoss(lo, hi)` with `lo < 0` accepts them and clips $\hat\alpha$ into the interval.
+`KLLoss` and `BernoulliLoss` can't represent `ATE` / `ATT` / shift-style estimands, because their α takes negative values; `fit` warns, and α̂ collapses to 0. `BoundedSquaredLoss(lo, hi)` with `lo < 0` accepts them and clips $\hat\alpha$ into the interval.
 
 ## Quickstart — ATE
 
