@@ -109,7 +109,7 @@ This is the end-user route: keep the wrapper in your own module, depend on `ries
 
 A backend needs one fit method and a predictor with a registered loader. Everything else is optional: the orchestrator looks each optional method up by name and uses a default when it's missing, so add only what your learner needs.
 
-<!-- The same checklist is in DESIGN.md §B.2.1; change both together. -->
+<!-- The same checklist is in DESIGN.md §B.2.1, which also records why it's kept in both places; change both together. -->
 
 | Piece | Needed? | Without it | Section |
 |---|---|---|---|

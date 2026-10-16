@@ -28,7 +28,9 @@ validation data. A backend whose settings name input columns (e.g.
 ``categorical_features``) also implements ``ColumnBackend.bind_columns``,
 which the orchestrator calls once per fit to resolve the names. Both are
 optional; the "Adding a backend" docs page lists every piece a backend
-needs.
+needs. DESIGN.md §B.2.1 records why the protocols are shaped this way: two
+optional hooks rather than one, and ``MomentBackend`` kept alongside
+``Backend``.
 
 Concrete backends live in implementation packages (rieszboost, krrr,
 forestriesz, ...).
