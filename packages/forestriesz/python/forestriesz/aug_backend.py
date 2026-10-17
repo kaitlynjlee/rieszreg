@@ -18,6 +18,7 @@ where the augmented Bregman-Riesz setting allows.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from numbers import Integral
 from typing import Sequence
 
 import numpy as np
@@ -219,6 +220,14 @@ class AugForestRieszBackend(BaseEstimator):
         cat_feats = resolve_column_positions(self.categorical_features, None, "categorical_features")
         check_features(aug_train.features, cat_feats)
 
+        if (
+            not isinstance(self.n_estimators, Integral)
+            or isinstance(self.n_estimators, bool)
+            or self.n_estimators < 1
+        ):
+            raise ValueError(
+                f"n_estimators={self.n_estimators!r}; must be an int >= 1."
+            )
         if not self.bootstrap and self.max_samples is not None:
             raise ValueError(
                 "max_samples must be None when bootstrap=False (sklearn parity)."
@@ -243,6 +252,8 @@ class AugForestRieszBackend(BaseEstimator):
             splitter=self.splitter,
             max_bins=self.max_bins,
         )
+        # Fail once here rather than in every joblib worker.
+        tree_backend._check_params()
         X_binned, mapper = tree_backend._bin(aug_train.features, random_state)
         trees = Parallel(n_jobs=self.n_jobs, verbose=self.verbose)(
             delayed(_fit_one_tree)(

@@ -154,3 +154,29 @@ def test_aug_categorical_features_accepts_column_names():
     assert np.array_equal(fits[0].predict(df), fits[1].predict(df))
     with pytest.raises(ValueError, match="integer level codes"):
         fits[0].predict(df.assign(cat=df["cat"] + 0.5))
+
+
+def _small_binary_df():
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=200)
+    a = (rng.uniform(size=200) < 1 / (1 + np.exp(-x))).astype(float)
+    return pd.DataFrame({"a": a, "x": x})
+
+
+@pytest.mark.parametrize("n_estimators", [0, -1, 2.5, True])
+def test_aug_rejects_bad_n_estimators(n_estimators):
+    est = AugForestRieszRegressor(estimand=ATE(), n_estimators=n_estimators)
+    with pytest.raises(ValueError, match="n_estimators"):
+        est.fit(_small_binary_df())
+
+
+def test_aug_checks_tree_settings_before_fitting_trees(monkeypatch):
+    import forestriesz.aug_backend as aug_backend
+
+    def _no_trees(*args, **kwargs):
+        raise AssertionError("a tree was fit before the settings were checked")
+
+    monkeypatch.setattr(aug_backend, "_fit_one_tree", _no_trees)
+    est = AugForestRieszRegressor(estimand=ATE(), n_estimators=3, min_samples_leaf=0)
+    with pytest.raises(ValueError, match="min_samples_leaf"):
+        est.fit(_small_binary_df())
