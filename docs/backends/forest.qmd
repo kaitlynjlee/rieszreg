@@ -288,6 +288,51 @@ For built-in estimands the moment-style basis is auto-resolved on load. For cust
 
 Both regressors are `BaseEstimator`s, so they compose with `clone`, `GridSearchCV`, `cross_val_predict`, `Pipeline`. See [Tuning and Cross-Fitting](../tuning-and-cross-fitting.qmd).
 
-## When the constant basis raises (moment-style only)
+## Basis requirements (moment-style only)
 
-For built-in estimands the per-row moment $m(\varphi)(Z_i, Y_i)$ doesn't depend on $Z_i$ when $\varphi \equiv 1$, so the constant basis is degenerate (every leaf would predict the same constant). `ForestRieszRegressor` detects this and raises with a hint to use `riesz_feature_fns="auto"` (the default) or supply a custom list. Explicit `riesz_feature_fns=None` is what raises. `AugForestRieszRegressor` is unaffected — its splitter does not depend on a user-supplied basis.
+For built-in estimands the per-row moment $m(\varphi)(Z_i, Y_i)$ doesn't depend on $Z_i$ when $\varphi \equiv 1$, so the constant basis is degenerate (every leaf would predict the same constant). `ForestRieszRegressor` raises on the constant basis, whether from an explicit `riesz_feature_fns=None` or from `"auto"` on an estimand with no default basis. For `ATE`, `ATT` and `TSM` the error points to `"auto"` or `AugForestRieszRegressor`; otherwise it points to a custom list or `AugForestRieszRegressor`. `AugForestRieszRegressor` is unaffected — its splitter does not depend on a user-supplied basis.
+
+For `ATE`, `ATT` and `TSM` the forest splits on the covariates only (unless you pass `split_feature_indices`), so the basis $\varphi$ has to carry all of the dependence of the representer on the treatment $A$. For other estimands the forest also splits on $A$, but the requirements below still apply. A custom `riesz_feature_fns` must meet both.
+
+**The basis must vary across the points the estimand evaluates.** As on the [Estimands](../estimands.qmd) page, write the estimand for row $i$, with observation $Z_i$ and outcome $Y_i$, as a weighted sum of its argument at evaluation points,
+
+$$
+m(\mu)(Z_i, Y_i) \;=\; \textstyle\sum_{j} C_{ij}\, \mu(Z_{ij}),
+$$
+
+with coefficients $C_{ij}$ and evaluation points $Z_{ij}$ that share the covariates $X_i$ but set the treatment: $A = 1$ and $A = 0$ for `ATE`, and for `ATT` on treated rows ($A_i = 1$); $A = v$ for `TSM(level=v)`; $A = A_i + \delta$ (the observed treatment $A_i$ plus the shift amount $\delta$, `delta`) and $A = A_i$ for `AdditiveShift`; and the same two points for `LocalShift` when $A_i$ is below its threshold $t$ (`threshold`). Call the basis *uninformative* if, for every row, every basis function takes the same value at the observed point $Z_i$ and at each evaluation point $Z_{ij}$. Then $\varphi(Z_{ij}) = \varphi(Z_i)$, so the moment of the basis factors as
+
+$$
+m(\varphi)(Z_i, Y_i) \;=\; \textstyle\sum_j C_{ij}\, \varphi(Z_{ij})
+\;=\; \Big(\textstyle\sum_j C_{ij}\Big)\, \varphi(Z_i)
+\;=\; m(1)(Z_i, Y_i)\, \varphi(Z_i),
+$$
+
+where $m(1)$ is the estimand applied to the constant function $1$, the sum of its coefficients. For every built-in estimand $m(1)$ is a constant: $1 - 1 = 0$ for `ATE`, `ATT`, `AdditiveShift` and `LocalShift`, and $1$ for `TSM`. Substituting the factored moment into the leaf solve above gives
+
+$$
+\hat\theta_\ell \;=\; \big(\textstyle\sum_{i\in\ell} \varphi(Z_i)\,\varphi(Z_i)^{\top} + n_\ell\,\lambda I\big)^{-1}
+                 \textstyle\sum_{i\in\ell} \varphi(Z_i)\, m(1)(Z_i, Y_i),
+$$
+
+the coefficients of a least-squares regression (ridge, when `l2` $> 0$) of the known quantity $m(1)$ on the basis. When $m(1)$ is a constant, as for every built-in, that regression target carries no information about the treatment, whichever columns the forest splits on. For `ATE`, `ATT` and the shift estimands the target is $0$, so $\hat\theta_\ell = 0$ and the fitted representer $\hat\alpha$ is $0$ everywhere. For `TSM` the target is $1$, so with `l2` $= 0$, $\hat\alpha = 1$ whenever the basis can express a constant within each leaf. In both cases $\hat\alpha$ equals $\mathbb E[\alpha_0(Z) \mid X]$, the true representer $\alpha_0$ averaged over the treatment given the covariates: applying the Riesz representation $\mathbb E[m(f)(Z, Y)] = \mathbb E[\alpha_0(Z) f(Z)]$ to a function $f$ of the covariates alone, for which $m(f) = m(1)\, f$ because every evaluation point shares the covariates, gives $\mathbb E[\alpha_0(Z) f(X)] = \mathbb E[m(1)(Z, Y) f(X)]$ for every such $f$, so $\mathbb E[\alpha_0(Z) \mid X] = \mathbb E[m(1)(Z, Y) \mid X]$, which is $0$ or $1$.
+
+Apart from the constant basis, which raises (above), `ForestRieszRegressor` still fits an uninformative basis but warns that $\hat\alpha$ estimates $\mathbb E[\alpha_0(Z) \mid X]$. This check is skipped for estimands that evaluate only the observed point. Separately, if the basis is not flagged as uninformative but the moment $m(\varphi)(Z_i, Y_i)$ of every basis function is zero on every row, it warns that each leaf parameter $\hat\theta_\ell$, and therefore the fitted representer $\hat\alpha$, is $0$.
+
+**What else the basis must represent depends on the estimand.** Within a leaf, the basis must be able to express how the true representer $\alpha_0$ varies with the treatment $A$:
+
+| Estimand | How $\alpha_0$ depends on the treatment $A$ | Basis |
+|---|---|---|
+| `ATE` (binary $A$) | $\alpha_0(A, X) = \mathbb 1\{A = 1\}/\pi(X) - \mathbb 1\{A = 0\}/(1 - \pi(X))$, with propensity $\pi(X) = P(A = 1 \mid X)$ | The default `[1{A=0}, 1{A=1}]` represents its dependence on $A$ exactly; the forest approximates the functions of $X$. |
+| `ATT` (binary $A$) | $\alpha_0(A, X) = \mathbb 1\{A = 1\} - \mathbb 1\{A = 0\}\, \pi(X)/(1 - \pi(X))$, for the unnormalized moment $A\,(\mu(1, X) - \mu(0, X))$, without dividing by $P(A = 1)$ | The same default, exactly in $A$. |
+| `TSM(level=v)` | $\alpha_0(A, X) = \mathbb 1\{A = v\} / P(A = v \mid X)$, with $P(A = v \mid X)$ the probability of level $v$ given the covariates | The default `[1{A=v}]`, exactly in $A$. |
+| `AdditiveShift` (continuous $A$) | $\alpha_0(A, X) = p(A - \delta \mid X)/p(A \mid X) - 1$, with $p(\cdot \mid X)$ the conditional density of the treatment | No default. Without knowing the conditional density, no fixed basis represents this exactly in general: pass a sieve in $A$, such as polynomials or splines, and accept some approximation error. |
+| `LocalShift(threshold=t)` (continuous $A$) | $\alpha_0(A, X) = \mathbb 1\{A < t + \delta\}\, p(A - \delta \mid X)/p(A \mid X) - \mathbb 1\{A < t\}$ | No default. As for `AdditiveShift`, and include the indicators $\mathbb 1\{A < t\}$ and $\mathbb 1\{A < t + \delta\}$, where the representer jumps. |
+
+A basis that adds covariate-only functions to these still fits, provided the functions are linearly independent within each leaf. The `ATE` and `ATT` default already sums to the constant function, so adding a covariate function that is constant, or nearly constant, within a leaf makes the leaf solve singular or unstable; small leaves make this more likely.
+
+::: {.callout-note}
+## Not stated in the ForestRiesz paper
+
+[Chernozhukov et al. (2022)](https://proceedings.mlr.press/v162/chernozhukov22a/chernozhukov22a.pdf), Section 4, allow splits on the covariates only and write the basis as $\varphi(T, X)$, a function of the treatment $T$ (called $A$ on this page) and the covariates $X$, but state neither requirement above. The first follows from the leaf solve: with an uninformative basis, each leaf regresses the known quantity $m(1)$ on the basis, and for every estimand on this page $m(1)$ is a constant, so no split can recover how the representer depends on the treatment. (For a derivative functional, which the paper also considers, a basis that does not depend on the treatment has moment $0$ directly.)
+:::
