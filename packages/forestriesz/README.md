@@ -168,6 +168,8 @@ Augmented rows carry weights $D_r$ (1 if $z_r$ is the original observation, 0 ot
 
 With `splitter="hist"`, the bin mapper is fitted once on the full augmented training data and every tree slices the shared binned matrix (the `sklearn.ensemble.HistGradientBoostingRegressor` convention). This saves `n_estimators - 1` repeats of `fit_bin_mapper + transform`. Setting `max_leaf_nodes` grows each tree best-first up to that many leaves, as in sklearn. `init` has no effect: each leaf stores its loss-optimal α directly.
 
+Each tree gets two seeds derived from `random_state`, one for its bootstrap draw and one for its own randomness (feature sampling when `max_features < 1`, random thresholds when `splitter="random"`), so the two are independent, as in EconML's GRF. sklearn's `RandomForestRegressor` starts both from one per-tree seed.
+
 ### Moment-style: `ForestRieszBackend` (`MomentBackend.fit_rows`)
 
 Per-row moments $m(\varphi)(Z_i, Y_i)$ are computed for each basis function $\varphi_j$ from the augmented rows `estimand.augment` emits (vectorized for the built-in estimands), and packed into EconML's linear-moment slot:

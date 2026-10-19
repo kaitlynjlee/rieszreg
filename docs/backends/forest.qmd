@@ -252,6 +252,8 @@ With `splitter="hist"`, the bin mapper is fitted once on the full augmented trai
 
 `init` has no effect on `AugForestRieszRegressor`: each leaf stores its loss-optimal α directly.
 
+`random_state` seeds the whole forest. Each tree gets two seeds derived from it: one for its bootstrap draw and one for the tree's own randomness (per-split feature sampling when `max_features < 1`, random thresholds when `splitter="random"`). The two are drawn separately, so a tree's bootstrap sample and its feature sampling are independent, as in EconML's GRF. sklearn's `RandomForestRegressor` instead starts both from the same per-tree seed.
+
 ### `ForestRieszRegressor`
 
 Forwarded to EconML's `BaseGRF`:

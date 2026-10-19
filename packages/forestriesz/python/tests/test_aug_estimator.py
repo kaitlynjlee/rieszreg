@@ -180,3 +180,24 @@ def test_aug_checks_tree_settings_before_fitting_trees(monkeypatch):
     est = AugForestRieszRegressor(estimand=ATE(), n_estimators=3, min_samples_leaf=0)
     with pytest.raises(ValueError, match="min_samples_leaf"):
         est.fit(_small_binary_df())
+
+
+def test_aug_bootstrap_and_tree_seeds_are_separate(monkeypatch):
+    # Each tree's bootstrap draw and its own generator (feature sampling,
+    # random thresholds) get separately drawn seeds, as in EconML's GRF.
+    import forestriesz.aug_backend as aug_backend
+
+    seen = []
+    fit_one_tree = aug_backend._fit_one_tree
+
+    def _record(*args, **kwargs):
+        seen.append((kwargs["bootstrap_seed"], kwargs["tree_seed"]))
+        return fit_one_tree(*args, **kwargs)
+
+    monkeypatch.setattr(aug_backend, "_fit_one_tree", _record)
+    AugForestRieszRegressor(
+        estimand=ATE(), n_estimators=5, max_features=0.5, random_state=0,
+    ).fit(_small_binary_df())
+    boot, tree = zip(*seen)
+    assert len(set(boot)) == len(set(tree)) == 5
+    assert not set(boot) & set(tree)

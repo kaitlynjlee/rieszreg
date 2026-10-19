@@ -107,6 +107,10 @@ For all built-in estimands, `m(W; 1) = Σ coef` in the trace doesn't depend on W
 
 Two further checks warn rather than raise. `_basis_is_uninformative` fires when every basis function takes its observed-row value at every point the estimand evaluates; then `m(W; φ) = m(W; 1) · φ(W)`, the forest gets no information about the treatment, and α̂ estimates `E[α₀ | X]` (0 for difference estimands, 1 for TSM). Otherwise a warning fires when `A ≡ 0` (e.g. `[1{A=0}]` for `TSM(level=1)`), since every leaf then solves θ = 0. The ForestRiesz paper writes the basis as φ(T, X) but never states that it must vary with T; the docs page ("Basis requirements") says so in a callout.
 
+### Per-tree seeding (augmentation-style)
+
+Each tree gets a `bootstrap_seed` (from `SeedSequence(random_state).generate_state`) for its block bootstrap and a separate `tree_seed` (from a spawned child sequence) for the tree's `random_state`, which riesztree uses for per-split feature sampling and random thresholds. This follows EconML's GRF, which draws separate seeds for subsampling and for each tree. sklearn's `RandomForest` starts both from one per-tree seed, and grf reads one generator per tree in sequence. Before 2026-10 the two draws shared one seed. The bootstrap seeds are unchanged by the split, so outputs at `max_features=1.0` with the exact or hist splitter are identical to before; fits with `max_features < 1` or `splitter="random"` changed.
+
 ### What's lazy-imported
 
 `econml` and `riesztree` are imported eagerly. There are no truly optional heavy deps in v1.
