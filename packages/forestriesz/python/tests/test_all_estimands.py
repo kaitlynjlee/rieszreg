@@ -7,6 +7,8 @@ estimands (TSM) work either way; we use locally constant for them.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -84,3 +86,48 @@ def test_local_shift_constant_raises(df_continuous):
         est.fit(df_continuous)
 
 
+# The forest never splits on treatment, so a basis that ignores it gives the
+# forest no information about the intervention: α̂ estimates E[α₀ | X], which
+# is the sum of the estimand's trace coefficients (0 for ATE / ATT, 1 for TSM).
+_NO_TREATMENT_BASIS = [lambda f: np.ones(len(f)), lambda f: f[:, 1]]
+
+
+@pytest.mark.parametrize(
+    "estimand, collapsed_to",
+    [(ATE(), 0.0), (ATT(), 0.0), (TSM(level=1), 1.0)],
+    ids=["ATE", "ATT", "TSM"],
+)
+def test_treatment_free_basis_warns(df_binary, estimand, collapsed_to):
+    est = ForestRieszRegressor(
+        estimand=estimand, riesz_feature_fns=_NO_TREATMENT_BASIS,
+        n_estimators=8, random_state=0,
+    )
+    with pytest.warns(UserWarning, match="uninformative"):
+        est.fit(df_binary)
+    np.testing.assert_allclose(est.predict(df_binary), collapsed_to, atol=1e-8)
+
+
+def test_zero_moment_basis_warns(df_binary):
+    # 1{A=0} varies with treatment but vanishes at TSM(level=1)'s evaluation
+    # point (A=1), so every row's moment is 0.
+    est = ForestRieszRegressor(
+        estimand=TSM(level=1), riesz_feature_fns=[lambda f: 1.0 - f[:, 0]],
+        n_estimators=8, random_state=0,
+    )
+    with pytest.warns(UserWarning, match="zero moment"):
+        est.fit(df_binary)
+    np.testing.assert_allclose(est.predict(df_binary), 0.0, atol=1e-8)
+
+
+def test_basis_with_one_treatment_free_function_fits(df_binary):
+    # Covariate-only functions next to treatment indicators: a usable fit.
+    basis = [lambda f: 1.0 - f[:, 0], lambda f: f[:, 0], lambda f: f[:, 1]]
+    est = ForestRieszRegressor(
+        estimand=ATE(), riesz_feature_fns=basis, n_estimators=8, random_state=0,
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pred = est.fit(df_binary).predict(df_binary)
+    assert not [w for w in caught if "riesz_feature_fns" in str(w.message)
+                or "zero moment" in str(w.message)]
+    assert np.all(np.isfinite(pred)) and np.any(pred != 0)

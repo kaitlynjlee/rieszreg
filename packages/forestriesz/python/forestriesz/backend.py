@@ -8,6 +8,7 @@ as a linear-moment problem for EconML's ``BaseGRF``, and returns a
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
@@ -38,6 +39,28 @@ def _per_row_moments(aug: AugmentedDataset, phi_fns: Sequence[Callable]) -> np.n
         np.bincount(aug.origin_index, weights=w[:, j], minlength=aug.n_rows)
         for j in range(phi_aug.shape[1])
     ])
+
+
+def _basis_is_uninformative(
+    aug: AugmentedDataset, X: np.ndarray, phi_fns: Sequence[Callable]
+) -> bool:
+    """Whether every basis function takes its observed-row value at every
+    point the estimand evaluates for that row.
+
+    Then ``m(W_i; φ) = m(W_i; 1) · φ(W_i)``: neither the moments nor the
+    Jacobian carry information about the intervention, and the forest fits
+    ``E[α₀ | X]``. Vacuous (False) when the estimand evaluates no point
+    other than the observed one.
+    """
+    X_origin = X[aug.origin_index]
+    moved = np.any(aug.features != X_origin, axis=1)
+    if not moved.any():
+        return False
+    return np.allclose(
+        _eval_phi(aug.features[moved], phi_fns),
+        _eval_phi(X_origin[moved], phi_fns),
+        rtol=1e-12, atol=1e-12,
+    )
 
 
 @dataclass(repr=False)
@@ -162,6 +185,30 @@ class ForestRieszBackend(BaseEstimator):
                     "with riesz_feature_fns=None: every row gives the forest "
                     "the same data. Keep the default riesz_feature_fns='auto', "
                     "or use AugForestRieszRegressor."
+                )
+            # The forest never splits on the treatment, so the basis must
+            # carry how α depends on it. Chernozhukov et al. (2022) write the
+            # basis as φ(T, X) but never state that it must vary with T.
+            if _basis_is_uninformative(aug_train, X_train, phi_fns):
+                warnings.warn(
+                    f"riesz_feature_fns is uninformative for {estimand.name}: "
+                    "every basis function takes the same value at each point "
+                    "the estimand evaluates, so the forest gets no information "
+                    "about the treatment and α̂ estimates E[α₀ | X] (0 for "
+                    "ATE, ATT and shift estimands, 1 for TSM). Use a basis "
+                    "that varies with the treatment, such as the default "
+                    "riesz_feature_fns='auto', or AugForestRieszRegressor.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # Zero moments: every leaf solves (Σ J + n·l2·I) θ = Σ A = 0.
+            elif np.allclose(A, 0.0, atol=1e-12):
+                warnings.warn(
+                    f"Every basis function in riesz_feature_fns has zero "
+                    f"moment m(W; φ) on every row for {estimand.name}, so "
+                    "every leaf solves θ = 0 and α̂ is 0 everywhere.",
+                    UserWarning,
+                    stacklevel=2,
                 )
 
         split_idx = self.split_feature_indices

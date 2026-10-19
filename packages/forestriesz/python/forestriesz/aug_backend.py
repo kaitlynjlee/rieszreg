@@ -18,6 +18,7 @@ where the augmented Bregman-Riesz setting allows.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from numbers import Integral
 from typing import Sequence
 
 import numpy as np
@@ -83,6 +84,7 @@ def _fit_one_tree(
     mapper,
     *,
     loss: Loss,
+    bootstrap_seed: int,
     tree_seed: int,
     n_subsample: int,
     bootstrap: bool,
@@ -90,10 +92,12 @@ def _fit_one_tree(
 ):
     """Joblib worker: fit one tree on a block-bootstrap subsample. With the
     histogram splitter, ``X_binned`` / ``mapper`` are shared by every tree,
-    so each tree slices the pre-binned rows instead of re-binning."""
+    so each tree slices the pre-binned rows instead of re-binning.
+    ``bootstrap_seed`` draws the rows and ``tree_seed`` seeds the tree's own
+    generator, so the two draws are independent."""
     idx = _block_bootstrap_indices(
         aug_train, n_subsample=n_subsample, bootstrap=bootstrap,
-        rng=np.random.default_rng(tree_seed),
+        rng=np.random.default_rng(bootstrap_seed),
     )
     sub = AugmentedDataset(
         features=aug_train.features[idx],
@@ -219,13 +223,26 @@ class AugForestRieszBackend(BaseEstimator):
         cat_feats = resolve_column_positions(self.categorical_features, None, "categorical_features")
         check_features(aug_train.features, cat_feats)
 
+        if (
+            not isinstance(self.n_estimators, Integral)
+            or isinstance(self.n_estimators, bool)
+            or self.n_estimators < 1
+        ):
+            raise ValueError(
+                f"n_estimators={self.n_estimators!r}; must be an int >= 1."
+            )
         if not self.bootstrap and self.max_samples is not None:
             raise ValueError(
                 "max_samples must be None when bootstrap=False (sklearn parity)."
             )
-        tree_seeds = [
-            int(s) for s in np.random.SeedSequence(random_state).generate_state(self.n_estimators)
-        ]
+        # Separate seeds for each tree's bootstrap draw and for its own
+        # generator (per-split feature sampling, random thresholds), as in
+        # EconML's GRF; sklearn's RandomForest starts both from one seed. The
+        # tree seeds come from a spawned child sequence, so the bootstrap
+        # seeds are the same as when one seed served both.
+        seeds = np.random.SeedSequence(random_state)
+        bootstrap_seeds = [int(s) for s in seeds.generate_state(self.n_estimators)]
+        tree_seeds = [int(s) for s in seeds.spawn(1)[0].generate_state(self.n_estimators)]
         n_subsample = _resolve_n_subsample(self.max_samples, aug_train.n_rows)
 
         # sklearn semantics: a leaf cap means best-first growth.
@@ -243,17 +260,20 @@ class AugForestRieszBackend(BaseEstimator):
             splitter=self.splitter,
             max_bins=self.max_bins,
         )
+        # Fail once here rather than in every joblib worker.
+        tree_backend._check_params()
         X_binned, mapper = tree_backend._bin(aug_train.features, random_state)
         trees = Parallel(n_jobs=self.n_jobs, verbose=self.verbose)(
             delayed(_fit_one_tree)(
                 aug_train, X_binned, mapper,
                 loss=loss,
-                tree_seed=seed,
+                bootstrap_seed=bootstrap_seed,
+                tree_seed=tree_seed,
                 n_subsample=n_subsample,
                 bootstrap=self.bootstrap,
                 tree_backend=tree_backend,
             )
-            for seed in tree_seeds
+            for bootstrap_seed, tree_seed in zip(bootstrap_seeds, tree_seeds)
         )
         predictor = AugForestPredictor(trees=list(trees), loss=loss)
         has_valid = aug_valid is not None and aug_valid.n_rows > 0

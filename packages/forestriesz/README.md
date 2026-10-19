@@ -168,6 +168,8 @@ Augmented rows carry weights $D_r$ (1 if $z_r$ is the original observation, 0 ot
 
 With `splitter="hist"`, the bin mapper is fitted once on the full augmented training data and every tree slices the shared binned matrix (the `sklearn.ensemble.HistGradientBoostingRegressor` convention). This saves `n_estimators - 1` repeats of `fit_bin_mapper + transform`. Setting `max_leaf_nodes` grows each tree best-first up to that many leaves, as in sklearn. `init` has no effect: each leaf stores its loss-optimal α directly.
 
+Each tree gets two seeds derived from `random_state`, one for its bootstrap draw and one for its own randomness (feature sampling when `max_features < 1`, random thresholds when `splitter="random"`), so the two are independent, as in EconML's GRF. sklearn's `RandomForestRegressor` starts both from one per-tree seed.
+
 ### Moment-style: `ForestRieszBackend` (`MomentBackend.fit_rows`)
 
 Per-row moments $m(\varphi)(Z_i, Y_i)$ are computed for each basis function $\varphi_j$ from the augmented rows `estimand.augment` emits (vectorized for the built-in estimands), and packed into EconML's linear-moment slot:
@@ -261,6 +263,7 @@ alpha_hat = est.predict(df)
 - **`riesz_feature_fns` callables don't auto-save.** Save persists the forest; load needs the callables repassed for custom bases. Built-in estimands round-trip fine via `riesz_feature_fns="auto"` (the default).
 - **R wrapper exposes `ForestRieszRegressor` only.** `AugForestRieszRegressor` works from Python; call it from R via reticulate if needed.
 - **Constant basis with `ForestRieszRegressor` is degenerate for built-in estimands.** Forcing `riesz_feature_fns=None` raises a row-constant check error. The default `"auto"` does the right thing. `AugForestRieszRegressor` is unaffected.
+- **A custom `riesz_feature_fns` must vary with the treatment.** A basis that takes the same value at the observed point and at every point the estimand evaluates is uninformative: each leaf then regresses the constant m(1) on the basis, so for the built-in estimands α̂ is E[α₀ | X], which is 0 for ATE / ATT / shift estimands and 1 for TSM. `ForestRieszRegressor` fits it anyway and warns. It also warns when every basis function has zero moment on every row (α̂ = 0). The ForestRiesz paper writes the basis as φ(T, X) but does not state this requirement.
 - **`KLLoss` and `BernoulliLoss` require non-negative C-coefficients in the augmented dataset** (density-ratio-style estimands like TSM and IPSI). They reject ATE / ATT / shift-style data at fit time with a clear error.
 - **Forest backends don't take `validation_fraction`.** Forests don't use a held-out slice for fit-time logic; validation loss is reported only when you pass `eval_set=` explicitly to `fit()`. (See rieszreg `DESIGN.md §A.2` for the agnostic-orchestrator rule that puts `validation_fraction` on the backends that actually use it: boosting, kernel ridge, neural.)
 
