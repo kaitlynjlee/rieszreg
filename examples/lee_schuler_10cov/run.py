@@ -1,0 +1,782 @@
+"""rieszboost, riesznet and the non-augmented ForestRiesz on the Lee & Schuler
+10-confounder binary DGP (dgp.py), for the ATE and the ATT.
+
+Protocol, as in the RieszBoost ICML manuscript (Section 3.3, Appendix C.2.3):
+each replicate draws an estimation set of 500 and then an independent
+training set of 500. Every learner is tuned by 5-fold cross-validation on the
+training set, over the grid below, then refit on the whole training set at
+the selected setting and evaluated on the estimation set. The outcome
+regression is one tuned XGBoost model per replicate, shared by every
+representer, and each representer goes into the one-step (DML) estimator.
+The oracle plugs in the true representer, so its gap to a learner is the
+cost of estimating alpha alone.
+
+Each (replicate, learner) pair is one task and caches its estimation-set
+predictions and the CV risk of every setting, so `summarize` assembles the
+tables and adding a learner never refits the others.
+
+  python run.py run --reps 0:2 --jobs 8      # a smoke test
+  python run.py summarize                    # tables, tuning checks
+"""
+
+from __future__ import annotations
+
+import _env  # noqa: F401  (threads and import paths; must precede numpy)
+
+import argparse
+import hashlib
+import importlib.metadata as md
+import inspect
+import itertools
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+import dgp
+
+HERE = Path(__file__).resolve().parent
+OUT_ROOT = Path(os.environ.get("RIESZ_SIM_OUT", HERE))
+CACHE = OUT_ROOT / "cache" / "lee_schuler_10cov"
+RESULTS = OUT_ROOT / "results" / "lee_schuler_10cov"
+
+# Same seed and draw order as examples/simulation/lee_schuler_icml.py, so the
+# two studies see identical datasets and pair replicate by replicate.
+BASE_SEED = 20260928
+N, K = 500, 5
+ESTIMANDS = ("ATE", "ATT")
+SEED = 0              # every learner with internal randomness
+VALID_FRAC = 0.2      # share of each training fold held out for early stopping
+
+
+def _grid(**axes):
+    return [dict(zip(axes, v)) for v in itertools.product(*axes.values())]
+
+
+# ------------------------------------------------------------ settings ---
+# The manuscript's settings (Appendix C.2.3). Boosted learners: patience 200,
+# cap 20000 trees, subsample 0.9. RieszNet: 3 hidden layers of 200, ELU, Adam
+# with weight decay 1e-3, patience 10, cap 1000 epochs. ForestRiesz is not in
+# the manuscript: the published ForestRiesz settings (the package defaults),
+# with the leaf size tuned.
+
+BOOST = dict(max_iter=20000, patience=200, subsample=0.9)
+NET = dict(max_iter=1000, patience=10, hidden_sizes=(200, 200, 200), weight_decay=1e-3, batch_size=64)
+
+XGB_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2], max_depth=[3, 5, 7])
+# A trial outcome regression, not the manuscript's: the 120-replicate pilot of
+# XGB_GRID had its smallest median regret at learning rate 1e-2 (the top) and
+# depth 3 (the bottom), 0.06 ahead of the next setting, and never chose 1e-5
+# or 1e-4, which run to the tree cap. Patience and subsample are unchanged.
+# `summarize --outcome outcome_shifted` uses it for every method's estimates.
+OUTCOME_SHIFTED_GRID = _grid(learning_rate=[1e-3, 3e-3, 1e-2, 3e-2, 1e-1], max_depth=[1, 2, 3, 5])
+RIESZNET_GRID = _grid(learning_rate=[1e-5, 1e-4, 1e-3, 1e-2, 1e-1])
+# The 120-replicate pilot of {2, 5, 10, 20, 50} chose 50 for the ATT 38% of
+# the time and 2 almost never, so the grid moved up. Each tree samples 45% of
+# the rows (about 180-225), so a leaf of 200 would leave trees unsplit.
+FOREST_GRID = _grid(min_samples_leaf=[5, 10, 20, 50, 100])
+
+
+# ------------------------------------------------------------ learners ---
+# Each takes (train, test, **setting) and returns (predictions on test as a
+# DataFrame, iterations kept by early stopping, or None).
+
+def _estimand(name):
+    from rieszreg import ATE, ATT
+    return {"ATE": ATE, "ATT": ATT}[name](treatment="A", covariates=tuple(dgp.COV))
+
+
+def _alpha_preds(est, test):
+    Z = test[["A"] + dgp.COV]
+    return pd.DataFrame({"alpha": est.predict(Z), "alpha1": est.predict(Z.assign(A=1.0)),
+                         "alpha0": est.predict(Z.assign(A=0.0))})
+
+
+def outcome_xgb(train, test, learning_rate, max_depth):
+    import xgboost as xgb
+    valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
+    cols = ["A"] + dgp.COV
+    fit_part, val = train[~valid], train[valid]
+    m = xgb.XGBRegressor(n_estimators=BOOST["max_iter"], learning_rate=learning_rate, max_depth=max_depth,
+                         subsample=BOOST["subsample"], early_stopping_rounds=BOOST["patience"],
+                         n_jobs=1, random_state=SEED)
+    m.fit(fit_part[cols], fit_part["Y"], eval_set=[(val[cols], val["Y"])], verbose=False)
+    Z = test[cols]
+    preds = pd.DataFrame({"mu": m.predict(Z), "mu1": m.predict(Z.assign(A=1.0)), "mu0": m.predict(Z.assign(A=0.0))})
+    return preds, m.best_iteration + 1
+
+
+def rieszboost(estimand):
+    def fit(train, test, learning_rate, max_depth):
+        from rieszboost import RieszBooster
+        b = RieszBooster(estimand=_estimand(estimand), n_estimators=BOOST["max_iter"], learning_rate=learning_rate,
+                         max_depth=max_depth, reg_lambda=0.0, subsample=BOOST["subsample"],
+                         early_stopping_rounds=BOOST["patience"], validation_fraction=VALID_FRAC,
+                         random_state=SEED).fit(train[["A"] + dgp.COV])
+        return _alpha_preds(b, test), b.best_iteration_ + 1
+    return fit
+
+
+def riesznet(estimand):
+    def fit(train, test, learning_rate):
+        from riesznet import RieszNet
+        n = RieszNet(estimand=_estimand(estimand), hidden_sizes=NET["hidden_sizes"], activation="elu",
+                     learning_rate=learning_rate, weight_decay=NET["weight_decay"], epochs=NET["max_iter"],
+                     batch_size=NET["batch_size"], early_stopping_rounds=NET["patience"],
+                     validation_fraction=VALID_FRAC, snapshot_epochs=[], random_state=SEED).fit(train[["A"] + dgp.COV])
+        return _alpha_preds(n, test), n.best_iteration_ + 1
+    return fit
+
+
+def forestriesz(estimand):
+    """Non-augmented ForestRiesz (Chernozhukov et al. 2022) on EconML's GRF."""
+    def fit(train, test, min_samples_leaf):
+        from forestriesz import ForestRieszRegressor
+        f = ForestRieszRegressor(estimand=_estimand(estimand), min_samples_leaf=min_samples_leaf,
+                                 n_jobs=1, random_state=SEED).fit(train[["A"] + dgp.COV])
+        return _alpha_preds(f, test), None
+    return fit
+
+
+def row_loss(kind, data, preds):
+    """Per-row held-out loss that CV minimizes: squared error for the outcome
+    regression, and the squared Riesz loss alpha^2 - 2 m(alpha) otherwise."""
+    if kind == "outcome":
+        return (data["Y"].to_numpy() - preds["mu"].to_numpy()) ** 2
+    m = preds["alpha1"].to_numpy() - preds["alpha0"].to_numpy()
+    if kind == "ATT":
+        m = data["A"].to_numpy() * m
+    return preds["alpha"].to_numpy() ** 2 - 2 * m
+
+
+# ---------------------------------------------------- rieszboost_l2 ---
+# Not the manuscript's protocol: rieszboost with a shifted grid, an L2 penalty
+# on leaf values, early-stopping patience 50 and subsample 0.8. The pilot of the
+# manuscript grid chose the largest learning rate and the smallest depth
+# often, never chose 1e-5, and chose 1e-4 mostly in fits that hit the tree
+# cap. An L2 penalty lambda shrinks a leaf of n augmented rows by 2n/(2n +
+# lambda), so it damps the few-row leaves that give extreme alpha-hat where
+# overlap is weak.
+#
+# Patience costs no extra fits: each fit runs at the largest patience, its
+# validation Riesz loss after every tree is computed from per-tree
+# predictions, and early stopping at each smaller patience is replayed on
+# that path. Boosting is sequential with a seeded row subsample, so the first
+# t trees of that fit are the trees a fit stopped at t would have.
+
+# The 120-replicate pilot of reg_lambda {0, 1, 10} chose 10, the top, in 73%
+# (ATE) and 67% (ATT) of replicates, and 10 had the smallest median regret
+# for both, so lambda moved up. lambda = 0 and 1 barely differ here, since a
+# leaf's curvature sum 2n is far above 1. Learning rate, depth and patience
+# had interior regret minima or a flat regret surface, so they stayed.
+#
+# Patience is fixed at 50, not tuned, since riesznet's patience is not tuned
+# either. In the pilot's {10, 50, 200}, 50 had the smallest median regret for
+# both estimands. The replay code below still accepts a patience grid.
+#
+# lambda moved up one step from {3, 10, 30, 100}: after 120 replicates the
+# smallest median regret was at lambda = 100 for both estimands, with four of
+# the top five settings at 100 (the regret surface is flat, so expect a small
+# gain).
+#
+# The learning rate moved up one step from {1e-3, 3e-3, 1e-2, 3e-2}: the
+# pilot's regret surface was flat along it (top settings within 0.01), 1e-3
+# accounted for most of the compute and every refit at the tree cap, and the
+# ATE chose 3e-2, the top, 43% of the time. Larger lambda shrinks every leaf,
+# which acts like a smaller learning rate, so 0.1 pairs with lambda 30-100.
+L2_GRID = _grid(learning_rate=[3e-3, 1e-2, 3e-2, 1e-1], max_depth=[1, 2, 3, 5],
+                reg_lambda=[10.0, 30.0, 100.0, 300.0], patience=[50])
+L2_SUBSAMPLE = 0.8    # share of individuals drawn per round (the manuscript's rieszboost uses 0.9)
+
+
+def _eta_path(b, Z):
+    """rows x trees: the booster's eta after each tree, from per-tree
+    predictions (each includes the base margin once, recovered from the
+    first two trees)."""
+    import xgboost as xgb
+    booster = b.predictor_.booster
+    d = xgb.DMatrix(np.asarray(b._features(Z), dtype=float))
+    per = np.column_stack([booster.predict(d, iteration_range=(k, k + 1))
+                           for k in range(booster.num_boosted_rounds())]).astype(float)
+    base = per[:, 0] + per[:, 1] - booster.predict(d, iteration_range=(0, 2)).astype(float)
+    return base[:, None] + np.cumsum(per - base[:, None], axis=1)
+
+
+def _alpha_path(b, df):
+    Z = df[["A"] + dgp.COV]
+    return {c: np.asarray(b.loss_.link_to_alpha(_eta_path(b, z)))
+            for c, z in (("alpha", Z), ("alpha1", Z.assign(A=1.0)), ("alpha0", Z.assign(A=0.0)))}
+
+
+def _riesz_rows(kind, df, alpha, alpha1, alpha0):
+    """row_loss for alpha arrays of any trailing shape (rows x trees)."""
+    m = alpha1 - alpha0
+    if kind == "ATT":
+        m = df["A"].to_numpy()[:, None] * m if m.ndim == 2 else df["A"].to_numpy() * m
+    return alpha ** 2 - 2 * m
+
+
+def _stop(path, patience):
+    """Trees kept by early stopping with this patience on a validation-loss path."""
+    best, best_i = np.inf, 0
+    for i, v in enumerate(path):
+        if v < best:
+            best, best_i = v, i
+        elif i - best_i >= patience:
+            break
+    return best_i + 1
+
+
+def _l2_fit(estimand, train, learning_rate, max_depth, reg_lambda):
+    """One fit at the largest patience, on 80% of `train`, stopping on the
+    other 20%; returns the booster and its validation-loss path."""
+    from rieszboost import RieszBooster
+    valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
+    cols = ["A"] + dgp.COV
+    b = RieszBooster(estimand=_estimand(estimand), n_estimators=BOOST["max_iter"], learning_rate=learning_rate,
+                     max_depth=max_depth, reg_lambda=reg_lambda, subsample=L2_SUBSAMPLE,
+                     early_stopping_rounds=max(s["patience"] for s in L2_GRID),
+                     random_state=SEED).fit(train[~valid][cols], eval_set=train[valid][cols])
+    v = train[valid].reset_index(drop=True)
+    path = _riesz_rows(estimand, v, **_alpha_path(b, v)).mean(axis=0)
+    return b, path
+
+
+def rieszboost_l2(estimand):
+    def select(train, test):
+        folds = np.arange(len(train)) * K // len(train)
+        patiences = sorted({s["patience"] for s in L2_GRID})
+        bases = list(dict.fromkeys((s["learning_rate"], s["max_depth"], s["reg_lambda"]) for s in L2_GRID))
+        losses = {str(s): [] for s in L2_GRID}
+        iters = {str(s): [] for s in L2_GRID}
+        replay_ok = []
+        for lr, depth, lam in bases:
+            for k in range(K):
+                val = train[folds == k].reset_index(drop=True)
+                b, path = _l2_fit(estimand, train[folds != k].reset_index(drop=True), lr, depth, lam)
+                replay_ok.append(_stop(path, max(patiences)) == b.best_iteration_ + 1)
+                a = _alpha_path(b, val)
+                for p in patiences:
+                    # at the fit's own patience, xgboost's stop; smaller ones are replayed
+                    t = b.best_iteration_ + 1 if p == max(patiences) else _stop(path, p)
+                    s = str(dict(learning_rate=lr, max_depth=depth, reg_lambda=lam, patience=p))
+                    losses[s].append(_riesz_rows(estimand, val, *(a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0"))))
+                    iters[s].append(t)
+        risk = {s: float(np.concatenate(v).mean()) for s, v in losses.items()}
+        best = L2_GRID[[str(s) for s in L2_GRID].index(min(risk, key=risk.get))]
+        b, path = _l2_fit(estimand, train, best["learning_rate"], best["max_depth"], best["reg_lambda"])
+        t = b.best_iteration_ + 1 if best["patience"] == max(patiences) else _stop(path, best["patience"])
+        a = _alpha_path(b, test)
+        preds = pd.DataFrame({c: a[c][:, t - 1] for c in ("alpha", "alpha1", "alpha0")})
+        return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": t,
+                       "replay_matches_booster": float(np.mean(replay_ok))}
+    return select
+
+
+# ------------------------------------------------------- propensity ---
+# The indirect representer of the manuscript's "Indirect" rows: a propensity
+# score from an XGBoost classifier, plugged into alpha's known form. Same grid
+# and fixed settings as the outcome regression, selected by 5-fold CV on log
+# loss (the authors' code used GridSearchCV's default score, accuracy). pi-hat
+# is not clipped, as in the manuscript. One fit per replicate serves both
+# estimands.
+
+def propensity_xgb(train, test, learning_rate, max_depth):
+    import xgboost as xgb
+    valid = np.random.default_rng(SEED).random(len(train)) < VALID_FRAC
+    fit_part, val = train[~valid], train[valid]
+    m = xgb.XGBClassifier(n_estimators=BOOST["max_iter"], learning_rate=learning_rate, max_depth=max_depth,
+                          subsample=BOOST["subsample"], early_stopping_rounds=BOOST["patience"],
+                          n_jobs=1, random_state=SEED)
+    m.fit(fit_part[dgp.COV], fit_part["A"], eval_set=[(val[dgp.COV], val["A"])], verbose=False)
+    return pd.DataFrame({"pi": m.predict_proba(test[dgp.COV])[:, 1]}), m.best_iteration + 1
+
+
+def _log_loss_rows(a, pi):
+    pi = np.clip(pi, 1e-12, 1 - 1e-12)      # only so a held-out 0 or 1 cannot give log(0)
+    return -(a * np.log(pi) + (1 - a) * np.log(1 - pi))
+
+
+def propensity(train, test):
+    folds = np.arange(len(train)) * K // len(train)
+    risk, iters = {}, {}
+    for s in XGB_GRID:
+        losses, its = [], []
+        for k in range(K):
+            val = train[folds == k].reset_index(drop=True)
+            p, it = propensity_xgb(train[folds != k], val, **s)
+            losses.append(_log_loss_rows(val["A"].to_numpy(), p["pi"].to_numpy()))
+            its.append(it)
+        risk[str(s)], iters[str(s)] = float(np.concatenate(losses).mean()), its
+    best = XGB_GRID[[str(s) for s in XGB_GRID].index(min(risk, key=risk.get))]
+    preds, it = propensity_xgb(train, test, **best)
+    return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": it}
+
+
+def indirect_alpha(estimand, a, pi):
+    return a / pi - (1 - a) / (1 - pi) if estimand == "ATE" else a - (1 - a) * pi / (1 - pi)
+
+
+# name -> (fit function, grid, loss kind, iteration cap[, selector]). A
+# component with a selector is fit by selector(train, test) instead of
+# cv_select(fit, grid, ...). Slowest first, so a parallel run starts the long
+# tasks early.
+COMPONENTS = {
+    **{f"rieszboost_l2_{e}": (None, L2_GRID, e, BOOST["max_iter"], rieszboost_l2(e)) for e in ESTIMANDS},
+    **{f"rieszboost_{e}": (rieszboost(e), XGB_GRID, e, BOOST["max_iter"]) for e in ESTIMANDS},
+    "outcome": (outcome_xgb, XGB_GRID, "outcome", BOOST["max_iter"]),
+    "outcome_shifted": (outcome_xgb, OUTCOME_SHIFTED_GRID, "outcome", BOOST["max_iter"]),
+    "propensity": (None, XGB_GRID, "propensity", BOOST["max_iter"], propensity),
+    **{f"riesznet_{e}": (riesznet(e), RIESZNET_GRID, e, NET["max_iter"]) for e in ESTIMANDS},
+    **{f"forestriesz_{e}": (forestriesz(e), FOREST_GRID, e, None) for e in ESTIMANDS},
+}
+LEARNERS = ("rieszboost", "rieszboost_l2", "riesznet", "forestriesz")
+
+
+# ----------------------------------------------------------- one task ---
+
+def data(rep):
+    """Estimation set, then training set."""
+    rng = np.random.default_rng([BASE_SEED, rep])
+    return dgp.draw(N, rng), dgp.draw(N, rng)
+
+
+def cv_select(fit, grid, kind, train, test):
+    """K-fold CV over `grid` by mean held-out loss; refit the best setting on
+    all of `train` and predict `test`."""
+    folds = np.arange(len(train)) * K // len(train)     # rows are iid, so contiguous folds
+    risk, iters = {}, {}
+    for s in grid:
+        losses, its = [], []
+        for k in range(K):
+            val = train[folds == k].reset_index(drop=True)
+            p, it = fit(train[folds != k], val, **s)
+            losses.append(row_loss(kind, val, p))
+            its.append(it)
+        risk[str(s)], iters[str(s)] = float(np.concatenate(losses).mean()), its
+    best = grid[[str(s) for s in grid].index(min(risk, key=risk.get))]
+    preds, it = fit(train, test, **best)
+    return preds, {"best": best, "cv_risk": risk, "cv_iters": iters, "iters": it}
+
+
+def _versions():
+    out = {}
+    for p in ("numpy", "pandas", "scikit-learn", "xgboost", "torch", "econml"):
+        try:
+            out[p] = md.version(p)
+        except md.PackageNotFoundError:
+            pass
+    return out
+
+
+def cache_key(comp):
+    """Everything that determines a component's fit except the replicate: its
+    learner source and settings, the data and CV code, the package versions,
+    and the source of the rieszreg packages it uses."""
+    fit, grid, kind, cap = COMPONENTS[comp][:4]
+    stem = comp.rsplit("_", 1)[0] if comp.endswith(ESTIMANDS) else comp
+    parts = [inspect.getsource(globals()["outcome_xgb" if stem.startswith("outcome") else stem]),
+             repr((grid, kind, cap, BOOST, NET, BASE_SEED, N, K, SEED, VALID_FRAC)),
+             inspect.getsource(cv_select), inspect.getsource(row_loss), inspect.getsource(data),
+             inspect.getsource(dgp), repr(sorted(_versions().items()))]
+    if stem == "rieszboost_l2":
+        parts += [inspect.getsource(f) for f in (_eta_path, _alpha_path, _riesz_rows, _stop, _l2_fit)]
+        parts.append(repr(L2_SUBSAMPLE))
+    if stem == "propensity":
+        parts += [inspect.getsource(f) for f in (propensity_xgb, _log_loss_rows)]
+    pkgs = {"rieszboost": ("rieszreg", "rieszboost"), "rieszboost_l2": ("rieszreg", "rieszboost"),
+            "riesznet": ("rieszreg", "riesznet"), "forestriesz": ("rieszreg", "forestriesz")}.get(stem, ())
+    for pkg in pkgs:
+        parts += [p.read_text() for p in sorted((_env.REPO / "packages" / pkg / "python" / pkg).rglob("*.py"))]
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
+
+
+def cache_path(comp, rep, key):
+    return CACHE / comp / f"rep{rep}_{key}.pkl"
+
+
+def _write(path, out):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    pd.to_pickle(out, tmp)
+    tmp.replace(path)                 # atomic: a killed job leaves the previous file in place
+
+
+def run_task(rep, comp, key, overwrite=False):
+    path = cache_path(comp, rep, key)
+    if path.exists() and not overwrite:
+        return
+    fit, grid, kind, _ = COMPONENTS[comp][:4]
+    selector = COMPONENTS[comp][4] if len(COMPONENTS[comp]) > 4 else None
+    est, train = data(rep)
+    t0 = time.perf_counter()
+    try:
+        preds, record = selector(train, est) if selector else cv_select(fit, grid, kind, train, est)
+        out = {"preds": {c: preds[c].to_numpy() for c in preds}, "record": record}
+    except Exception as err:          # a failed fit is recorded as missing, and the run continues
+        out = {"preds": None, "record": {"error": repr(err)}}
+    out["seconds"] = time.perf_counter() - t0
+    _write(path, out)
+    if overwrite:                     # drop this pair's files from older code, so one version remains
+        for old in (CACHE / comp).glob(f"rep{rep}_*.pkl"):
+            if old != path:
+                old.unlink()
+    print(f"done rep={rep} {comp} {out['seconds']:.0f}s{' FAILED' if out['preds'] is None else ''}", flush=True)
+
+
+def run(reps, comps, jobs, overwrite=False):
+    """Fit every (replicate, component) pair not yet cached under the current
+    key. With overwrite, refit every pair and replace its cache file."""
+    keys = {c: cache_key(c) for c in comps}
+    tasks = [(r, c, keys[c], overwrite) for c in comps for r in reps
+             if overwrite or not cache_path(c, r, keys[c]).exists()]
+    print(f"{len(tasks)} tasks to run{' (overwriting)' if overwrite else ''}", flush=True)
+    if jobs == 1:
+        for t in tasks:
+            run_task(*t)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(jobs) as pool:
+            list(pool.map(lambda t: _task_process(*t), tasks))
+
+
+def _task_process(rep, comp, key, overwrite):
+    """Fit one (replicate, component) pair in its own Python process. A crash
+    in native code (xgboost aborted once with "stack smashing detected" on
+    Savio) then loses that fit alone instead of every worker in a shared
+    pool. The pair is retried once and, if it crashes again, recorded as a
+    failed fit, which summarize counts in its `failed` column."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), "task", str(rep), comp]
+    if overwrite:
+        cmd.append("--overwrite")
+    for attempt in (1, 2):
+        code = subprocess.run(cmd).returncode
+        if code == 0:
+            return
+        how = f"signal {signal.Signals(-code).name}" if code < 0 else f"exit code {code}"
+        print(f"rep={rep} {comp}: process ended with {how} (attempt {attempt})", flush=True)
+    _write(cache_path(comp, rep, key), {"preds": None, "seconds": float("nan"),
+                                        "record": {"error": f"fit process crashed twice ({how})"}})
+    print(f"done rep={rep} {comp} FAILED (process crashed twice)", flush=True)
+
+
+# ------------------------------------------------------------- summary ---
+
+# The manuscript's Tables 1 and 2 (1000 replicates), for reference. Its
+# RieszNet ATE row has MAE above RMSE, which averages of per-replicate values
+# cannot do, so one of those two numbers is a typo.
+PAPER = {
+    ("ATE", "rieszboost"): dict(alpha_rmse=0.902, alpha_mae=0.534, pct_bias=0.421, rmse=0.238, coverage=0.941),
+    ("ATE", "riesznet"): dict(alpha_rmse=0.989, alpha_mae=2.489, pct_bias=-0.854, rmse=0.253, coverage=0.905),
+    ("ATT", "rieszboost"): dict(alpha_rmse=0.675, alpha_mae=0.303, pct_bias=0.582, rmse=0.259, coverage=0.936),
+    ("ATT", "riesznet"): dict(alpha_rmse=3.194, alpha_mae=1.610, pct_bias=0.253, rmse=0.283, coverage=0.952),
+    ("ATE", "indirect"): dict(alpha_rmse=0.895, alpha_mae=0.532, pct_bias=0.237, rmse=0.237, coverage=0.946),
+    ("ATT", "indirect"): dict(alpha_rmse=0.709, alpha_mae=0.300, pct_bias=0.405, rmse=0.273, coverage=0.943),
+}
+
+
+def load(comp):
+    key = cache_key(comp)
+    return {int(f.name[3:].split("_")[0]): pd.read_pickle(f) for f in (CACHE / comp).glob(f"rep*_{key}.pkl")}
+
+
+def one_step(estimand, d, mu, alpha):
+    a, y = d["A"].to_numpy(), d["Y"].to_numpy()
+    tau, resid = mu["mu1"] - mu["mu0"], y - mu["mu"]
+    if estimand == "ATE":
+        phi = tau + alpha * resid
+        est = phi.mean()
+    else:
+        p = a.mean()
+        est = np.mean(a * tau + alpha * resid) / p
+        phi = (a * (tau - est) + alpha * resid) / p
+    return float(est), float(phi.std(ddof=1) / np.sqrt(len(y)))
+
+
+OUTCOMES = ("outcome", "outcome_shifted")
+
+
+def estimates(outcome="outcome", reps=None):
+    """One row per (replicate, estimand, method), every method using the
+    outcome regression `outcome`; `reps` restricts the replicates."""
+    mu = load(outcome)
+    fits = {c: load(c) for c in COMPONENTS if c not in OUTCOMES + ("propensity",)}
+    prop = load("propensity")
+    rows = []
+    for rep in sorted(mu):
+        if mu[rep]["preds"] is None or (reps is not None and rep not in reps):
+            continue
+        d, _ = data(rep)
+        X, A = d[dgp.COV].to_numpy(), d["A"].to_numpy()
+        mu0 = {"mu": dgp.outcome(A, X), "mu1": dgp.outcome(1.0, X), "mu0": dgp.outcome(0.0, X)}
+        for e in ESTIMANDS:
+            a0 = dgp.true_alpha(e, A, X)
+            for method in ("oracle_mu0", "oracle", "indirect") + LEARNERS:
+                if method.startswith("oracle"):
+                    alpha = a0
+                else:
+                    got = prop.get(rep) if method == "indirect" else fits[f"{method}_{e}"].get(rep)
+                    if got is None:
+                        continue
+                    if got["preds"] is None:
+                        rows.append(dict(rep=rep, estimand=e, method=method, failed=True))
+                        continue
+                    alpha = (indirect_alpha(e, A, got["preds"]["pi"]) if method == "indirect"
+                             else got["preds"]["alpha"])
+                # oracle_mu0 also uses the true outcome regression: a check on
+                # the pipeline and on Monte Carlo noise, since with alpha_0 the
+                # one-step estimator is unbiased for any independent mu-hat.
+                est, se = one_step(e, d, mu0 if method == "oracle_mu0" else mu[rep]["preds"], alpha)
+                rows.append(dict(rep=rep, estimand=e, method=method, failed=False, est=est, se=se,
+                                 alpha_rmse=float(np.sqrt(np.mean((alpha - a0) ** 2))),
+                                 alpha_mae=float(np.mean(np.abs(alpha - a0)))))
+    return pd.DataFrame(rows)
+
+
+def table(df):
+    """Performance per (estimand, method), each measure with its Monte Carlo SE."""
+    rows = []
+    for (e, m), g in df.groupby(["estimand", "method"], sort=False):
+        ok = g[~g.failed]
+        R = len(ok)
+        err = ok.est.to_numpy() - dgp.PSI[e]
+        rmse = np.sqrt(np.mean(err ** 2))
+        cov = np.mean(np.abs(err) <= 1.96 * ok.se.to_numpy())
+        rows.append(dict(
+            estimand=e, method=m, reps=R, failed=int(g.failed.sum()),
+            alpha_rmse=ok.alpha_rmse.mean(), alpha_rmse_mcse=ok.alpha_rmse.std(ddof=1) / np.sqrt(R),
+            alpha_mae=ok.alpha_mae.mean(), alpha_mae_mcse=ok.alpha_mae.std(ddof=1) / np.sqrt(R),
+            pct_bias=100 * err.mean() / dgp.PSI[e], pct_bias_mcse=100 * err.std(ddof=1) / np.sqrt(R) / dgp.PSI[e],
+            rmse=rmse, rmse_mcse=np.std(err ** 2, ddof=1) / np.sqrt(R) / (2 * rmse),
+            emp_se=err.std(ddof=1), mean_se=ok.se.mean(),
+            coverage=cov, coverage_mcse=np.sqrt(cov * (1 - cov) / R)))
+    return pd.DataFrame(rows)
+
+
+def tuning(comps=None):
+    """Per component (default: all), the settings CV selected, the share of
+    selections on the low or high edge of each tuned axis, and the share of
+    refits that reached the iteration cap. A consistent edge means the grid
+    should move."""
+    lines = []
+    for comp, spec in COMPONENTS.items():
+        if comps is not None and comp not in comps:
+            continue
+        grid, cap = spec[1], spec[3]
+        recs = [g["record"] for g in load(comp).values() if g["preds"] is not None]
+        if not recs:
+            continue
+        lines.append(f"\n{comp}: {len(recs)} replicates")
+        lines.append(pd.Series([str(r["best"]) for r in recs]).value_counts(normalize=True).round(2).to_string())
+        for axis in grid[0]:
+            vals = sorted({s[axis] for s in grid})
+            if len(vals) > 1:
+                chosen = np.array([r["best"][axis] for r in recs])
+                lines.append(f"  {axis}: at lowest {np.mean(chosen == vals[0]):.2f}, at highest {np.mean(chosen == vals[-1]):.2f}")
+        if cap:
+            its = np.array([r["iters"] for r in recs])
+            lines.append(f"  refit iterations: median {int(np.median(its))}, share at cap {np.mean(its >= cap):.2f}")
+            if "learning_rate" in grid[0] and np.any(its >= cap):
+                lr = np.array([r["best"]["learning_rate"] for r in recs])
+                by = ", ".join(f"{v:g}: {np.mean(its[lr == v] >= cap):.2f}" for v in sorted(set(lr)))
+                lines.append(f"  share of refits at cap, by selected learning rate: {by}")
+        lines.append(regret(recs, grid))
+    return "\n".join(lines)
+
+
+def regret(recs, grid):
+    """Median regret of each setting: its CV risk minus the smallest CV risk
+    in the same replicate, taken over replicates. When the risk surface is
+    flat, selection frequencies put settings on an edge by chance; the setting
+    with the smallest median regret is the one the edge rule should check."""
+    risk = pd.DataFrame([r["cv_risk"] for r in recs])
+    reg = risk.sub(risk.min(axis=1), axis=0).median().sort_values()
+    best = grid[[str(s) for s in grid].index(reg.index[0])]
+    edges = [f"{axis} at {'lowest' if best[axis] == min(v) else 'highest'}"
+             for axis in best for v in [[s[axis] for s in grid]]
+             if len(set(v)) > 1 and best[axis] in (min(v), max(v))]
+    out = ["  median regret (CV risk above the replicate's best), smallest five:"]
+    out += [f"    {k}: {v:.4f}" for k, v in reg.head(5).items()]
+    out.append(f"  smallest median regret: {reg.index[0]} -> " + ("; ".join(edges) + " (on the edge)" if edges else "interior"))
+    return "\n".join(out)
+
+
+def cache_status():
+    """What is in the cache, per component: files written by the current code
+    (matching cache key), files from other code or package versions, and
+    failed fits with their first error."""
+    lines = [f"cache: {CACHE}" + ("" if CACHE.exists() else "  (does not exist)")]
+    if "RIESZ_SIM_OUT" not in os.environ:
+        lines.append("RIESZ_SIM_OUT is not set; savio.sh writes to /global/scratch/users/$USER/rieszreg_sim")
+    for comp in COMPONENTS:
+        files = list((CACHE / comp).glob("rep*.pkl"))
+        key = cache_key(comp)
+        current = [f for f in files if f.stem.endswith(key)]
+        failed = [pd.read_pickle(f)["record"].get("error") for f in current]
+        failed = [e for e in failed if e]
+        line = f"  {comp:16s} {len(current):5d} current, {len(files) - len(current):5d} with another key, {len(failed)} failed"
+        if failed:
+            line += f"; first error: {failed[0][:200]}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def outcome_error(outcome="outcome", reps=None):
+    """RMSE of mu-hat against mu_0 at the observed (A, X), and of
+    tau-hat = mu-hat(1, X) - mu-hat(0, X) against tau_0, on the estimation
+    set, averaged over replicates with its MCSE."""
+    rows = []
+    for rep, g in sorted(load(outcome).items()):
+        if g["preds"] is None or (reps is not None and rep not in reps):
+            continue
+        d, _ = data(rep)
+        X, A, m = d[dgp.COV].to_numpy(), d["A"].to_numpy(), g["preds"]
+        tau0 = dgp.outcome(1.0, X) - dgp.outcome(0.0, X)
+        rows.append((np.sqrt(np.mean((m["mu"] - dgp.outcome(A, X)) ** 2)),
+                     np.sqrt(np.mean((m["mu1"] - m["mu0"] - tau0) ** 2))))
+    if not rows:
+        return f"{outcome}: no fits"
+    a = np.array(rows)
+    se = a.std(axis=0, ddof=1) / np.sqrt(len(a))
+    return (f"{outcome} ({len(a)} replicates): RMSE of mu-hat vs mu_0 {a[:, 0].mean():.3f} (MCSE {se[0]:.3f}), "
+            f"of tau-hat vs tau_0 {a[:, 1].mean():.3f} (MCSE {se[1]:.3f})")
+
+
+METHODS = ("oracle_mu0", "oracle", "indirect") + LEARNERS
+
+
+def summarize(outcome="outcome", reps=None, estimands=None, methods=None):
+    """Tables, the manuscript's numbers and tuning checks. `estimands` and
+    `methods` (default: all) restrict every part of the output to those rows
+    and those learners' tuning blocks; the outcome regression's block stays."""
+    df = estimates(outcome, reps)
+    if not df.empty:
+        df = df[df.estimand.isin(estimands or ESTIMANDS) & df.method.isin(methods or METHODS)]
+    if df.empty:
+        print("No results to summarize. What the cache holds:")
+        print(cache_status())
+        print("'another key' means the files came from different code or package versions than this "
+              "checkout and environment; rerun, or summarize with the environment that wrote them.")
+        return
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    tag = "" if outcome == "outcome" else f"_{outcome}"
+    if reps is not None:
+        tag += f"_reps{min(reps)}-{max(reps)}"
+    if estimands:
+        tag += "_" + "-".join(estimands)
+    if methods:
+        tag += "_" + "-".join(methods)
+    df.to_csv(RESULTS / f"estimates{tag}.csv", index=False)
+    t = table(df)
+    t.to_csv(RESULTS / f"table{tag}.csv", index=False)
+    pd.set_option("display.width", 250)
+    pd.set_option("display.max_columns", 30)
+    print(f"Outcome regression: {outcome}" + ("" if reps is None else f"; replicates {min(reps)} to {max(reps)}"))
+    for o in OUTCOMES:
+        print("  " + outcome_error(o, reps))
+    print("Representer accuracy (manuscript Table 1) and one-step estimator (Table 2), with MCSEs:")
+    print(t.round(3).to_string(index=False))
+    paper = pd.DataFrame([dict(estimand=e, method=m, **v) for (e, m), v in PAPER.items()
+                          if e in (estimands or ESTIMANDS) and m in (methods or METHODS)])
+    if not paper.empty:
+        print("\nThe manuscript, for reference:")
+        print(paper.to_string(index=False))
+    learners = [m for m in (methods or METHODS) if m in LEARNERS]
+    extra = ["propensity"] if "indirect" in (methods or METHODS) else []
+    print(tuning([outcome] + extra + [f"{m}_{e}" for m in learners for e in (estimands or ESTIMANDS)]))
+
+
+def status():
+    """Per component: cache files under the current key and under each older
+    key, with the newest file's time. Older keys come from different code or
+    package versions and are ignored by summarize."""
+    import datetime
+    print(f"cache: {CACHE}")
+    for comp in COMPONENTS:
+        new = cache_key(comp)
+        by_key = {}
+        for f in (CACHE / comp).glob("rep*.pkl"):
+            by_key.setdefault(f.stem.rsplit("_", 1)[1], []).append(f.stat().st_mtime)
+        parts = []
+        for k, ts in sorted(by_key.items(), key=lambda kv: (kv[0] != new, -max(kv[1]))):
+            when = datetime.datetime.fromtimestamp(max(ts)).strftime("%m-%d %H:%M")
+            parts.append(f"{'current' if k == new else k}: {len(ts)} (newest {when})")
+        print(f"  {comp:18s} " + ("; ".join(parts) if parts else "none"))
+
+
+def rekey(comps, from_key=None, dry_run=False):
+    """Copy each component's cache files from an older cache key to the
+    current one, keeping the originals.
+
+    The cache key hashes the whole source of the rieszreg packages a learner
+    uses, so any edit there (a docstring, a save/load change) orphans every
+    cached fit, even when the fits themselves would not change. Use this only
+    after checking that the change leaves the fits unchanged, for example by
+    refitting one replicate with the new code and comparing it with the old
+    cache file. With several older keys present, pass --from-key.
+    """
+    for comp in comps:
+        new = cache_key(comp)
+        files = sorted((CACHE / comp).glob("rep*.pkl"))
+        keys = sorted({f.stem.rsplit("_", 1)[1] for f in files} - {new})
+        if from_key is None and len(keys) != 1:
+            print(f"{comp}: {len(keys)} older keys {keys}; pass --from-key to pick one")
+            continue
+        src = from_key or keys[0]
+        moved = 0
+        for f in files:
+            if f.stem.endswith(src):
+                rep = int(f.name[3:].split("_")[0])
+                dst = cache_path(comp, rep, new)
+                if not dst.exists():
+                    if not dry_run:
+                        shutil.copy2(f, dst)
+                    moved += 1
+        print(f"{comp}: {'would copy' if dry_run else 'copied'} {moved} files from key {src} to {new}")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--reps", default="0:2", help="half-open range: 0:100 runs replicates 0 to 99")
+    r.add_argument("--components", nargs="*", default=None, help=f"default: all of {list(COMPONENTS)}")
+    r.add_argument("--jobs", type=int, default=1)
+    r.add_argument("--overwrite", action="store_true",
+                   help="refit and replace cached pairs, deleting their files from older code")
+    sm = sub.add_parser("summarize")
+    sm.add_argument("--outcome", default="outcome", choices=["outcome", "outcome_shifted"],
+                    help="the outcome regression every method's estimate uses")
+    sm.add_argument("--reps", default=None, help="half-open range, e.g. 0:80; default: all")
+    sm.add_argument("--estimands", nargs="+", choices=list(ESTIMANDS), default=None,
+                    help="default: both")
+    sm.add_argument("--methods", nargs="+", default=None, choices=["oracle_mu0", "oracle", "indirect", *LEARNERS],
+                    help="default: all")
+    t = sub.add_parser("task", help="fit one (replicate, component) pair; used internally by run")
+    t.add_argument("rep", type=int)
+    t.add_argument("component")
+    t.add_argument("--overwrite", action="store_true")
+    sub.add_parser("status", help="cached fits per learner, by cache key")
+    k = sub.add_parser("rekey", help="reuse cached fits after a code change verified not to alter them")
+    k.add_argument("--components", nargs="+", required=True)
+    k.add_argument("--from-key", default=None)
+    k.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    if a.cmd == "run":
+        lo, hi = (int(v) for v in a.reps.split(":"))
+        run(range(lo, hi), a.components or list(COMPONENTS), a.jobs, a.overwrite)
+    elif a.cmd == "task":
+        run_task(a.rep, a.component, cache_key(a.component), a.overwrite)
+    elif a.cmd == "rekey":
+        rekey(a.components, a.from_key, a.dry_run)
+    elif a.cmd == "status":
+        status()
+    else:
+        reps = None if a.reps is None else set(range(*(int(v) for v in a.reps.split(":"))))
+        summarize(a.outcome, reps, a.estimands, a.methods)
