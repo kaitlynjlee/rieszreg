@@ -31,7 +31,8 @@
 #
 #SBATCH --job-name=riesz_pilot_cv5
 #SBATCH --account=co_biostat
-#SBATCH --partition=biostat_savio3_normal
+#SBATCH --partition=savio3
+#SBATCH --qos=biostat_savio3_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
