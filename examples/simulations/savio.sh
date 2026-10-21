@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Savio job array for pilot.py, with 5-fold CV tuning. Each array task runs a
+# Savio job array for pilot.py: 5-fold cross-fitting, with 5-fold CV tuning
+# inside each fold (results go to pilot_cf5). Each array task runs a
 # fixed shard of the task list (pilot.py run --shard K/N) on 32 cores, one
 # single-threaded process per core:
 #   1. 50 replicates of every DGP in every block (ate, tsm, shift);
@@ -14,34 +15,36 @@
 #   cd ~/rieszreg && git checkout simulations && uv sync --all-packages --all-extras
 # If the clone exists already: cd ~/rieszreg && git checkout simulations && git pull && uv sync --all-packages --all-extras
 #
-# Cost: the single-split pilot took about 9 core-hours on a laptop. 5-fold CV
-# fits every setting five times, so about 45 laptop core-hours, and Savio has
-# run these studies about 3x slower per core: roughly 135 core-hours, or
-# 30-60 minutes per array task over 8 tasks of 32 cores. The time limit
-# leaves room; a task that times out is finished by resubmitting.
+# Cost: cross-fitting repeats every task's tuning and fit once per fold, on
+# 4/5 of the sample. From the per-task times of the 5-fold CV run
+# (results/pilot_cv5), that is about 470 laptop core-hours, mostly rieszboost
+# (ATE, TSM). Savio has run these studies about 3x slower per core: roughly
+# 1,400 core-hours, or about 3 hours per array task over 16 tasks of 32
+# cores. A task that times out is finished by resubmitting.
 #
 # Submit (from examples/simulations, so logs/ is created before Slurm opens it):
 #   mkdir -p logs && sbatch savio.sh
 # Check a smoke run first (one shard, 2 replicates, a few minutes):
-#   mkdir -p logs && REPS=0:2 MID_REPS=50:52 sbatch --array=0 --time=0:30:00 savio.sh
+#   mkdir -p logs && REPS=0:2 MID_REPS=50:52 sbatch --array=0 --time=1:00:00 savio.sh
 # Then, on a login node (the results are on scratch, not in this folder):
 #   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim uv run python pilot.py summarize
-# and copy them back for the comparison with the single-split pilot:
-#   rsync -av savio:/global/scratch/users/<user>/rieszreg_sim/pilot_cv5 results/
+# and copy them back for the comparison with the sample-splitting pilot:
+#   rsync -av savio:/global/scratch/users/<user>/rieszreg_sim/pilot_cf5 results/
+#   python pilot.py summarize --compare results/pilot_cv5
 #
-#SBATCH --job-name=riesz_pilot_cv5
+#SBATCH --job-name=riesz_pilot_cf5
 #SBATCH --account=co_biostat
 #SBATCH --partition=savio3
 #SBATCH --qos=biostat_savio3_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=3:00:00
-#SBATCH --array=0-7
-#SBATCH --output=logs/pilot_cv5_%A_%a.log
+#SBATCH --time=6:00:00
+#SBATCH --array=0-15
+#SBATCH --output=logs/pilot_cf5_%A_%a.log
 
 set -euo pipefail
-N_SHARDS=${N_SHARDS:-8}          # must match the --array range (0 to N_SHARDS - 1)
+N_SHARDS=${N_SHARDS:-16}         # must match the --array range (0 to N_SHARDS - 1)
 REPS=${REPS:-0:50}
 MID_REPS=${MID_REPS:-50:200}
 SHARD="$SLURM_ARRAY_TASK_ID/$N_SHARDS"

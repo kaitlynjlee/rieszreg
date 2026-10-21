@@ -8,14 +8,20 @@ only Monte Carlo noise in the measure comes from X. It is also reported on the
 weak-overlap rows of the test set alone: min(pi, 1 - pi) < 0.05 for the ATE,
 pi < 0.05 for the TSM, |alpha0| > 3 for the shift.
 
-The one-step estimator follows ../lee_schuler_10cov: every nuisance is fit on
-the training sample of n, and psi-hat = mean[m(mu-hat) + alpha-hat (Y - mu-hat)]
-is evaluated on an independent estimation sample of n, with an
-influence-function SE and a 95% Wald interval. One XGBoost outcome regression
-per replicate (the task "outcome") is shared by every alpha-hat, so a method's
-gap to the oracle, which plugs in alpha0, is the cost of estimating alpha
-alone. The true psi0 is exact for a binary treatment and a 4M-draw Monte
-Carlo integral for the shift (dgp.true_psi).
+The one-step estimator uses 5-fold cross-fitting on one sample of n, as an
+analyst would: for each fold, every nuisance is tuned and fit on the other
+four folds and predicts on the held-out one, and psi-hat = mean[m(mu-hat) +
+alpha-hat (Y - mu-hat)] averages the out-of-fold predictions over all n,
+with an influence-function SE and a 95% Wald interval. The alpha-hat RMSE
+above is the mean over the five fold fits. One XGBoost outcome regression
+per replicate and fold (the task "outcome") is shared by every alpha-hat, so
+a method's gap to the oracle, which plugs in alpha0, is the cost of
+estimating alpha alone. The true psi0 is exact for a binary treatment and a
+4M-draw Monte Carlo integral for the shift (dgp.true_psi).
+
+Earlier results (results/pilot, results/pilot_cv5) fit on one sample of n
+and evaluated psi-hat on a second, independent sample of n. Their training
+sample is this design's sample, so the replicates still pair.
 
 Blocks (see dgp.py for the DGPs):
   ate        ATE at n = 1000, claims 1 and 2. Plug-ins (XGBoost and main-terms
@@ -28,10 +34,19 @@ Blocks (see dgp.py for the DGPs):
   shift      Additive shift by 0.5, n = 1000, claim 1. The classification density
              ratio (unclipped and clipped at 0.01 and 0.05) and three Riesz
              learners.
-In the binary blocks, plugin_xgb_rl is the XGBoost propensity plug-in with its
-setting chosen by the held-out squared Riesz loss of the weights it implies
-(pi-hat clipped to [0.01, 0.99]) instead of by log loss: the same model class
-as plugin_xgb, tuned for the target that the Riesz learners are tuned for.
+The ATE block has two forests: AugForestRieszRegressor (augforestriesz), the
+package's recommended forest, and ForestRieszRegressor (forestriesz), the
+ForestRiesz of Chernozhukov et al. (2022). Results up to 2026-10-21 also had
+a plug-in tuned on the Riesz loss (plugin_xgb_rl); its result files are
+still on disk but no block lists it, so the summary ignores them.
+
+Every Riesz learner also gets clipped variants, <method>_clip01 and
+<method>_clip05: |alpha-hat| capped at the largest |alpha-hat| a plug-in
+can reach when its probability is clipped to [c, 1 - c], 1 / c for a binary
+treatment (see _clip_alpha). The fit and its tuning are unchanged; only the
+predictions are clipped. For Riesz tasks run before these variants existed,
+the summary derives them for psi-hat from the stored alpha-hat; their
+alpha-hat RMSE needs a rerun.
 
 For every alpha-hat the summary also reports, on the estimation sample:
   * the remainder mean[(alpha-hat - alpha0)(mu0 - mu-hat)], which is the bias
@@ -41,9 +56,11 @@ For every alpha-hat the summary also reports, on the estimation sample:
     alpha-hat. Its bias is zero, so it shows each alpha-hat's variance cost
     alone.
 
-Tuning, the same for every learner: 5-fold cross-validation on the training
-sample. Each setting is fit on four folds and scored on the fifth, and the
-setting with the smallest mean held-out loss is refit on the whole sample.
+Tuning, the same for every learner: 5-fold cross-validation inside each
+cross-fitting fold's training part (nested, so the held-out fold never
+informs the tuning). Each setting is fit on four tuning folds and scored on
+the fifth, and the setting with the smallest mean held-out loss is refit on
+the whole training part.
 The loss is the squared Riesz loss for Riesz learners (`score`), log loss
 for the classifiers, and squared error for the outcome and exposure models.
 XGBoost early-stops on the held-out fold, and the refit uses the mean
@@ -51,14 +68,17 @@ stopping iteration. The earlier results (results/pilot) tuned on a single
 20% split, which picked noisy winners from large grids. The datasets are the
 same, so the two sets of results pair replicate by replicate.
 
-Each (block, dgp, n, rep, method) is one task and writes one JSON file, plus
-one .npz of its predictions on the estimation sample, so a rerun fills only
-the gaps. Results go to $RIESZ_SIM_OUT/pilot_cv5 (default: results/pilot_cv5).
+Each (block, dgp, n, rep, method) is one task, covering all five folds, and
+writes one JSON file, plus one .npz of its out-of-fold predictions on the
+sample, so a rerun fills only the gaps. Results go to $RIESZ_SIM_OUT/pilot_cf5
+(default: results/pilot_cf5).
 
 Usage:
   python pilot.py run --blocks ate tsm shift --reps 0:20 --jobs 9
   python pilot.py run --reps 0:50 --shard 3/8 --jobs 32   # one of 8 array tasks
+  python pilot.py run --refit --reps 0:200 --jobs 9    # add new variants to finished Riesz tasks
   python pilot.py summarize
+  python pilot.py summarize --compare results/pilot_cv5   # also pair with the sample-splitting run
 """
 
 from __future__ import annotations
@@ -81,8 +101,9 @@ import pandas as pd
 import dgp as D
 
 HERE = Path(__file__).resolve().parent
-# Set RIESZ_SIM_OUT to put results elsewhere, e.g. cluster scratch storage.
-OUT = Path(os.environ.get("RIESZ_SIM_OUT", HERE / "results")) / "pilot_cv5"
+# Set RIESZ_SIM_OUT to put results elsewhere, e.g. cluster scratch storage, and
+# RIESZ_SIM_RUN to summarize an earlier run (e.g. pilot_cv5).
+OUT = Path(os.environ.get("RIESZ_SIM_OUT", HERE / "results")) / os.environ.get("RIESZ_SIM_RUN", "pilot_cf5")
 BASE_SEED = 20261020
 SEED = 0
 N_TEST = 20_000
@@ -96,16 +117,16 @@ BLOCKS = {
               "bulk_feature", "logistic", "smooth", "step", "sparse50", "additive", "interaction",
               "hard_unshared_1", "mix33_1", "mix67_1", "hard_shared_1",
               "hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
-        methods=["plugin_xgb", "plugin_xgb_rl", "plugin_logit", "rieszboost", "riesznet", "krrr",
-                 "riesztree", "forestriesz"]),
+        methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree",
+                 "augforestriesz", "forestriesz"]),
     "tsm": dict(
         estimand="TSM", ns=[250, 1000, 4000],
         dgps=["additive", "additive_g2", "interaction"],
-        methods=["plugin_xgb", "plugin_xgb_rl", "rieszboost", "rieszboost_kl"]),
+        methods=["plugin_xgb", "rieszboost", "rieszboost_kl"]),
     "tsm_align": dict(
         estimand="TSM", ns=[1000],
         dgps=["hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
-        methods=["plugin_xgb", "plugin_xgb_rl", "rieszboost", "rieszboost_kl"]),
+        methods=["plugin_xgb", "rieszboost", "rieszboost_kl"]),
     "shift": dict(
         estimand="SHIFT", ns=[1000],
         dgps=list(D.SHIFT),
@@ -142,12 +163,29 @@ def _grid(**axes):
 #     Now leafwise, {3, ..., 64} leaves x minimum leaf size {5, 20, 50}.
 #   * ForestRiesz: leaf size 5, the bottom, in 37%. -> {1, 2, 5, ..., 100}
 #     (1 is a hard limit).
+# Third move, after the 5-fold CV run (results/pilot_cv5; share of fits at each
+# edge, by block):
+#   * riesztree: minimum leaf 50, the top, in 66% (ATE). -> {5, 20, 50, 100, 200};
+#     64 leaves chosen in 1%, dropped.
+#   * rieszboost: L2 penalty 1000, the top, in 28-43% (rieszboost_kl 27-40%);
+#     1 chosen in 6-11%. -> {0, 10, 100, 1000, 10000}, same size (0 is a hard limit).
+#   * krrr: length scale 0.25x median, the bottom, in 18% (ATE); 8x in 0-1% (ATE)
+#     but 2x in 52% (shift). -> {0.125, ..., 8}: one step down, 8 kept.
+#   * riesznet: learning rate 3e-4, the bottom, in 17% (ATE) and 29% (shift).
+#     -> {1e-4, ..., 3e-2}.
+#   * AugForestRieszRegressor is new to the pilot. Its default minimum leaf
+#     is 50 ("leaves of a few rows give very noisy alpha-hat"); the grid
+#     spans 5 to 200 around it, the range ForestRiesz and riesztree used.
+#     100 trees, bootstrap and every feature at each split (max_features =
+#     1.0), its defaults, are fixed. ForestRiesz keeps its grid: it picked
+#     1 (a hard limit) in 15% and 100 in 5%.
 GRIDS = {
     "xgb": _grid(max_depth=[1, 2, 3, 5, 8], learning_rate=[0.03, 0.1, 0.3, 1.0]),
-    "rieszboost": _grid(max_depth=[1, 2, 3, 5, 8], reg_lambda=[0.0, 1.0, 10.0, 100.0, 1000.0]),
-    "riesznet": _grid(learning_rate=[3e-4, 1e-3, 3e-3, 1e-2, 3e-2]),
-    "krrr": _grid(length_scale_mult=[0.25, 0.5, 1.0, 2.0, 4.0, 8.0]),
-    "riesztree": _grid(max_leaf_nodes=[3, 4, 6, 8, 12, 16, 24, 32, 64], min_samples_leaf=[5, 20, 50]),
+    "rieszboost": _grid(max_depth=[1, 2, 3, 5, 8], reg_lambda=[0.0, 10.0, 100.0, 1000.0, 10000.0]),
+    "riesznet": _grid(learning_rate=[1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]),
+    "krrr": _grid(length_scale_mult=[0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]),
+    "riesztree": _grid(max_leaf_nodes=[3, 4, 6, 8, 12, 16, 24, 32], min_samples_leaf=[5, 20, 50, 100, 200]),
+    "augforestriesz": _grid(min_samples_leaf=[5, 10, 20, 50, 100, 200]),
     "forestriesz": _grid(min_samples_leaf=[1, 2, 5, 10, 20, 50, 100]),
 }
 GRIDS["rieszboost_kl"] = GRIDS["rieszboost"]
@@ -155,15 +193,17 @@ GRIDS["rieszboost_kl"] = GRIDS["rieszboost"]
 
 # ------------------------------------------------------------- data ---
 
-def train_data(dgp_name, n, rep):
-    """The training sample and its tuning folds. The 20% split drawn first was
-    the single-split tuning of results/pilot; it is still drawn so that the
-    folds come from the same random stream position on every run."""
+def sample_data(dgp_name, n, rep):
+    """The sample, its cross-fitting folds, and the tuning folds used inside
+    each fold's training part. The sample and the cross-fitting folds are
+    the training sample and tuning folds of results/pilot_cv5 (the 20% split
+    of results/pilot is still drawn, to keep the random stream in place)."""
     rng = np.random.default_rng([BASE_SEED, zlib.crc32(dgp_name.encode()), n, rep])
     d = D.DGPS[dgp_name].draw(n, rng)
     rng.random(n)
-    folds = rng.permutation(np.arange(n) % K)
-    return d, folds
+    cf = rng.permutation(np.arange(n) % K)
+    inner = rng.permutation(np.arange(n) % K)
+    return d, cf, inner
 
 
 def _tune(grid, fit_score):
@@ -178,12 +218,6 @@ def _tune(grid, fit_score):
         extras.append([r[1] for r in res])
     i = int(np.argmax(scores))
     return grid[i], scores, extras[i]
-
-
-def est_data(dgp_name, n, rep):
-    """The estimation sample: n fresh draws, independent of the training sample,
-    on which the one-step estimator is evaluated."""
-    return D.DGPS[dgp_name].draw(n, np.random.default_rng([BASE_SEED, zlib.crc32(dgp_name.encode()), n, rep, 1]))
 
 
 def test_data(dgp_name, estimand):
@@ -252,13 +286,21 @@ def _riesztree(est, covs, train, max_leaf_nodes, min_samples_leaf):
                               random_state=SEED)
 
 
+def _augforestriesz(est, covs, train, min_samples_leaf):
+    from forestriesz import AugForestRieszRegressor
+    return AugForestRieszRegressor(estimand=est, min_samples_leaf=min_samples_leaf, n_jobs=1, random_state=SEED)
+
+
 def _forestriesz(est, covs, train, min_samples_leaf):
+    # The published ForestRiesz (EconML GRF on the original rows, treatment-
+    # indicator sieve, splits on covariates), with its published defaults.
     from forestriesz import ForestRieszRegressor
     return ForestRieszRegressor(estimand=est, min_samples_leaf=min_samples_leaf, n_jobs=1, random_state=SEED)
 
 
 RIESZ = {"rieszboost": _rieszboost("squared"), "rieszboost_kl": _rieszboost("kl"), "riesznet": _riesznet,
-         "krrr": _krrr, "riesztree": _riesztree, "forestriesz": _forestriesz}
+         "krrr": _krrr, "riesztree": _riesztree, "augforestriesz": _augforestriesz,
+         "forestriesz": _forestriesz}
 
 
 # A fit function takes (method, estimand, train, folds, covs) and returns
@@ -266,7 +308,9 @@ RIESZ = {"rieszboost": _rieszboost("squared"), "rieszboost_kl": _rieszboost("kl"
 # maps each variant to alpha-hat at (A, X) for a shift, and to
 # (alpha-hat(1, x), alpha-hat(0, x)) for a binary treatment.
 
-def fit_riesz(method, estimand, train, folds, covs):
+def fit_riesz(method, estimand, train, folds, covs, best=None, scores=None):
+    """With best given (a setting this task's CV already chose), skip the
+    tuning and only refit it on the whole sample."""
     cols = ["A"] + covs
     est = _estimand(estimand, covs)
 
@@ -274,15 +318,48 @@ def fit_riesz(method, estimand, train, folds, covs):
         part = train[folds != k]
         m = RIESZ[method](est, covs, part, **s).fit(part[cols])
         return float(m.score(train[folds == k][cols])), None
-    best, scores, _ = _tune(GRIDS[method], fit_score)
+    if best is None:
+        best, scores, _ = _tune(GRIDS[method], fit_score)
     m = RIESZ[method](est, covs, train, **best).fit(train[cols])
 
     def predict(df):
         Z = df[cols]
         if estimand == "SHIFT":
-            return {method: m.predict(Z)}
-        return {method: (m.predict(Z.assign(A=1.0)), m.predict(Z.assign(A=0.0)))}
+            alpha = m.predict(Z)
+        else:
+            alpha = (m.predict(Z.assign(A=1.0)), m.predict(Z.assign(A=0.0)))
+        out = {method: alpha}
+        for c in CLIPS:
+            out[f"{method}_clip{str(c)[2:]}"] = _clip_alpha(estimand, alpha, c)
+        return out
     return predict, best, scores
+
+
+CLIPS = (0.01, 0.05)
+
+
+def _alpha_cap(estimand, c):
+    """The largest |alpha-hat| of a plug-in whose probability is clipped to
+    [c, 1 - c]: 1 / c for the ATE and TSM, (1 - c) / c - 1 for the shift
+    classifier (100 and 98 at c = 0.01)."""
+    return (1 - c) / c - 1.0 if estimand == "SHIFT" else 1.0 / c
+
+
+def _clip_alpha(estimand, alpha, c):
+    """A Riesz learner's alpha-hat with |alpha-hat| capped at the plug-in's cap
+    at c. The cap catches the drift where an arm is missing (alpha-hat(1, x)
+    to +inf, alpha-hat(0, x) to -inf). Unlike a full clip to the plug-in's
+    range, it does not raise alpha-hat(1, x) to 1 / (1 - c) or set the TSM's
+    alpha-hat(0, x) to 0. On results/pilot_cv5 that inner bound was active on
+    up to 55% of rows, and it made psi-hat resolved worse in 9 of 138 cells
+    (the shared-feature rungs) and better in none. The cap alone was never
+    resolved worse.
+    The cap is the same for both arms, so it applies to alpha-hat at the
+    observed (A, X) as it is."""
+    cap = _alpha_cap(estimand, c)
+    if estimand == "SHIFT":
+        return np.clip(alpha, -cap, cap)
+    return tuple(np.clip(v, -cap, cap) for v in alpha)
 
 
 def _xgb_tuned(make, X, y, folds, score):
@@ -304,25 +381,12 @@ def _neg_log_loss(y, m, X):
     return -log_loss(y, m.predict_proba(X)[:, 1], labels=[0, 1])
 
 
-def _xgb_propensity(train, folds, covs, score=_neg_log_loss):
+def _xgb_propensity(train, folds, covs):
     import xgboost as xgb
 
     def make(**kw):
         return xgb.XGBClassifier(n_jobs=1, random_state=SEED, **kw)
-    return _xgb_tuned(make, train[covs], train["A"], folds, score)
-
-
-def _neg_riesz_loss(estimand):
-    """Held-out score for a propensity model: minus the squared Riesz loss
-    alpha(A, X)^2 - 2 m(alpha)(X) of the weights it implies, pi-hat clipped
-    to [0.01, 0.99] as in the reference plug-in."""
-    def score(a, m, X):
-        a = np.asarray(a)
-        a1, a0 = _plugin_alpha(estimand, np.clip(m.predict_proba(X)[:, 1], 0.01, 0.99))
-        alpha = a * a1 + (1 - a) * a0
-        m_alpha = a1 - a0 if estimand == "ATE" else a1
-        return -float(np.mean(alpha**2 - 2 * m_alpha))
-    return score
+    return _xgb_tuned(make, train[covs], train["A"], folds, _neg_log_loss)
 
 
 def _plugin_alpha(estimand, pi):
@@ -335,8 +399,6 @@ def _plugin_alpha(estimand, pi):
 def fit_plugin_binary(method, estimand, train, folds, covs):
     if method == "plugin_xgb":
         m, best, scores = _xgb_propensity(train, folds, covs)
-    elif method == "plugin_xgb_rl":
-        m, best, scores = _xgb_propensity(train, folds, covs, _neg_riesz_loss(estimand))
     else:
         from sklearn.linear_model import LogisticRegression
         m, best, scores = LogisticRegression(C=1e6, max_iter=2000).fit(train[covs], train["A"]), {}, []
@@ -344,7 +406,7 @@ def fit_plugin_binary(method, estimand, train, folds, covs):
     def predict(df):
         pi = m.predict_proba(df[covs])[:, 1]
         out = {method: _plugin_alpha(estimand, np.clip(pi, 1e-12, 1 - 1e-12))}
-        for c in (0.01, 0.05):
+        for c in CLIPS:
             out[f"{method}_clip{str(c)[2:]}"] = _plugin_alpha(estimand, np.clip(pi, c, 1 - c))
         return out
     return predict, best, scores
@@ -371,7 +433,7 @@ def fit_plugin_classif(method, estimand, train, folds, covs):
     def predict(df):
         p = m.predict_proba(df[cols])[:, 1]
         out = {method: (1 - p) / np.clip(p, 1e-12, None) - 1.0}
-        for c in (0.01, 0.05):
+        for c in CLIPS:
             q = np.clip(p, c, 1 - c)
             out[f"{method}_clip{str(c)[2:]}"] = (1 - q) / q - 1.0
         return out
@@ -428,73 +490,107 @@ def _mkdir(path):
     return path
 
 
-def _outcome_task(estimand, dgp_name, train, folds, est, covs):
-    """Fit mu-hat; store on the estimation sample what the one-step estimator
-    and the oracle need. Returns (record fields, arrays)."""
+def _outcome_task(estimand, dgp_name, d, cf, inner, covs):
+    """Cross-fit mu-hat; store on the sample what the one-step estimator and
+    the oracle need: out-of-fold mu-hat and m(mu-hat), and the truth. Returns
+    (record fields, arrays)."""
     g = D.DGPS[dgp_name]
-    predict, best, scores = fit_outcome(estimand, train, folds, covs)
-    mu, m_mu = predict(est)
-    X, a = est[covs].to_numpy(), est["A"].to_numpy()
+    n = len(d)
+    mu, m_mu, bests, scores = np.empty(n), np.empty(n), [], []
+    for k in range(K):
+        tr = cf != k
+        predict, best, s = fit_outcome(estimand, d[tr], inner[tr], covs)
+        mu[~tr], m_mu[~tr] = predict(d[~tr])
+        bests.append(best)
+        scores.append(s)
+    X, a = d[covs].to_numpy(), d["A"].to_numpy()
     mu0, m0 = D._mu(a, X), D.m_mu0(estimand, a, X)
-    arrays = {"y": est["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
+    arrays = {"y": d["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
               "mu0": mu0, "m_mu0": m0}
     fields = {"rows": [], "rmse_mu": float(np.sqrt(np.mean((mu - mu0) ** 2))),
-              "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": best, "grid": GRIDS["xgb"],
+              "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": bests, "grid": GRIDS["xgb"],
               "scores": scores}
     return fields, arrays
 
 
-def run_task(block, dgp_name, n, rep, method):
+def _alpha_rows(alphas, dgp_name, estimand, test, covs, alpha0, weak, pi):
+    """Test-set error of each alpha-hat variant: {variant: {rmse, rmse_weak,
+    max_abs_alpha_hat}}. For a binary treatment A is integrated out given X:
+    E[(alpha-hat - alpha0)^2 | X]."""
+    out = {}
+    for v, a in alphas.items():
+        if pi is None:
+            sq, big = (a - alpha0) ** 2, np.abs(a).max()
+        else:
+            g, X = D.DGPS[dgp_name], test[covs].to_numpy()
+            e1 = a[0] - g.true_alpha(estimand, np.ones(len(X)), X)
+            e0 = a[1] - g.true_alpha(estimand, np.zeros(len(X)), X)
+            sq, big = pi * e1**2 + (1 - pi) * e0**2, max(np.abs(a[0]).max(), np.abs(a[1]).max())
+        out[v] = {"rmse": float(np.sqrt(sq.mean())),
+                  "rmse_weak": float(np.sqrt(sq[weak].mean())) if weak.any() else None,
+                  "max_abs_alpha_hat": float(big)}
+    return out
+
+
+def run_task(block, dgp_name, n, rep, method, refit=False):
+    """refit: reuse the setting a finished Riesz task chose by CV, refit it and
+    rewrite its results with every current variant (e.g. the clipped ones).
+    The record keeps the tuning's grid, scores and seconds."""
     path = task_path(block, dgp_name, n, rep, method)
     estimand = BLOCKS[block]["estimand"]
     t0 = time.time()
+    old = json.loads(path.read_text()) if refit else None
     try:
-        train, folds = train_data(dgp_name, n, rep)
-        est = est_data(dgp_name, n, rep)
+        d, cf, inner = sample_data(dgp_name, n, rep)
         covs = D.DGPS[dgp_name].covariates
         if method == "outcome":
-            fields, arrays = _outcome_task(estimand, dgp_name, train, folds, est, covs)
+            fields, arrays = _outcome_task(estimand, dgp_name, d, cf, inner, covs)
             np.savez(_mkdir(path).with_suffix(".npz"), **arrays)
             rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method, **fields,
-                   "seconds": time.time() - t0}
+                   "design": "crossfit5", "seconds": time.time() - t0}
             path.write_text(json.dumps(rec))
             return path, False, rec["seconds"]
         test, alpha0, weak, pi = test_data(dgp_name, estimand)
         fit = (fit_riesz if method in RIESZ else
                fit_plugin_classif if method == "plugin_classif" else fit_plugin_binary)
-        predict, best, scores = fit(method, estimand, train, folds, covs)
-        alphas = predict(test)
-        # alpha-hat at the observed (A, X) of the estimation sample, for the one-step estimator.
-        a_est = est["A"].to_numpy()
-        on_est = {k: (v if estimand == "SHIFT" else a_est * v[0] + (1 - a_est) * v[1])
-                  for k, v in predict(est).items()}
+        a_obs = d["A"].to_numpy()
+        on_est, fold_rows, best, scores = {}, [], [], []
+        for k in range(K):
+            tr = cf != k
+            predict, b, s = (fit_riesz(method, estimand, d[tr], inner[tr], covs, old["best"][k], old["scores"][k])
+                             if old else fit(method, estimand, d[tr], inner[tr], covs))
+            best.append(b)
+            scores.append(s)
+            # Out-of-fold alpha-hat at the observed (A, X), for the one-step estimator.
+            for v, a in predict(d[~tr]).items():
+                on_est.setdefault(v, np.empty(n))[~tr] = (a if estimand == "SHIFT"
+                                                         else a_obs[~tr] * a[0] + (1 - a_obs[~tr]) * a[1])
+            fold_rows.append(_alpha_rows(predict(test), dgp_name, estimand, test, covs, alpha0, weak, pi))
         np.savez(_mkdir(path).with_suffix(".npz"), **on_est)
-        rows = []
-        for k, v in alphas.items():
-            if pi is None:
-                sq, big = (v - alpha0) ** 2, np.abs(v).max()
-            else:
-                # Integrate A out given X: E[(alpha-hat - alpha0)^2 | X].
-                g, X = D.DGPS[dgp_name], test[covs].to_numpy()
-                e1 = v[0] - g.true_alpha(estimand, np.ones(len(X)), X)
-                e0 = v[1] - g.true_alpha(estimand, np.zeros(len(X)), X)
-                sq, big = pi * e1**2 + (1 - pi) * e0**2, max(np.abs(v[0]).max(), np.abs(v[1]).max())
-            rows.append({"variant": k, "rmse": float(np.sqrt(sq.mean())),
-                         "rmse_weak": float(np.sqrt(sq[weak].mean())) if weak.any() else None,
-                         "max_abs_alpha_hat": float(big)})
+        # alpha-hat's test-set error: the mean over the five fold fits.
+        rows = [{"variant": v, "rmse": float(np.mean([f[v]["rmse"] for f in fold_rows])),
+                 "rmse_weak": (float(np.mean([f[v]["rmse_weak"] for f in fold_rows])) if weak.any() else None),
+                 "max_abs_alpha_hat": float(max(f[v]["max_abs_alpha_hat"] for f in fold_rows))}
+                for v in fold_rows[0]]
         rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method, "rows": rows,
                "best": best, "grid": GRIDS["xgb"] if method.startswith("plugin_") else GRIDS[method],
                "scores": scores, "seconds": time.time() - t0}
+        if old:
+            rec.update(grid=old["grid"], seconds=old["seconds"], refit_seconds=time.time() - t0,
+                       refit_of={r["variant"]: r["rmse"] for r in old["rows"]})
     except Exception:
         rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method,
                "error": traceback.format_exc(), "seconds": time.time() - t0}
+        if old:  # keep the finished task's record
+            print(f"refit failed, kept the old record: {path}\n{rec['error']}", flush=True)
+            return path, True, rec["seconds"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec))
     return path, "error" in rec, rec["seconds"]
 
 
 # Rough relative cost, so the slowest tasks start first.
-COST = {"riesznet": 10, "rieszboost": 6, "rieszboost_kl": 6, "forestriesz": 3, "krrr": 3, "outcome": 2}
+COST = {"riesznet": 10, "rieszboost": 6, "rieszboost_kl": 6, "augforestriesz": 3, "forestriesz": 3, "krrr": 3, "outcome": 2}
 
 
 def cmd_run(args):
@@ -507,12 +603,21 @@ def cmd_run(args):
         # shard on every submission, whatever the other arguments.
         k, n_shards = map(int, args.shard.split("/"))
         tasks = [t for t in tasks if zlib.crc32(repr(t).encode()) % n_shards == k]
-    tasks = [t for t in tasks if args.overwrite or not _done(t)]
+    if args.refit:
+        # Finished Riesz tasks whose results predate a variant (e.g. the clipped ones).
+        def stale(t):
+            if t[4] not in RIESZ or not _done(t):
+                return False
+            rec = json.loads(task_path(*t).read_text())
+            return "error" not in rec and f"{t[4]}_clip01" not in {r["variant"] for r in rec["rows"]}
+        tasks = [t for t in tasks if stale(t)]
+    else:
+        tasks = [t for t in tasks if args.overwrite or not _done(t)]
     tasks.sort(key=lambda t: -COST.get(t[4], 1) * t[2])
-    print(f"{len(tasks)} tasks on {args.jobs} processes", flush=True)
+    print(f"{len(tasks)} {'refit ' if args.refit else ''}tasks on {args.jobs} processes", flush=True)
     t0, done = time.time(), 0
     with ProcessPoolExecutor(args.jobs) as pool:
-        for fut in as_completed([pool.submit(run_task, *t) for t in tasks]):
+        for fut in as_completed([pool.submit(run_task, *t, refit=args.refit) for t in tasks]):
             path, err, sec = fut.result()
             done += 1
             if err or done % 20 == 0 or done == len(tasks):
@@ -549,17 +654,34 @@ def paired(df, a, b, col="rmse"):
 
 # The contrasts AIMS.md makes predictions about, as (block, a, b): rmse[a] -
 # rmse[b], negative when a is better.
-RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "forestriesz"]
-CONTRASTS = (
-    [("ate", m, "plugin_xgb_clip01") for m in RIESZ_ATE]
+RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "forestriesz"]
+
+
+def headline(m):
+    """The variant a learner is reported by. riesznet's |alpha-hat| is capped
+    at 1/0.01, the bound of the reference plug-in (clipped at 0.01): uncapped,
+    the few replicates where it drifts dominate every mean (AIMS.md section 6).
+    The other Riesz learners barely change under that cap, so they are
+    reported as fitted."""
+    return f"{m}_clip01" if m == "riesznet" else m
+
+
+CONTRASTS = list(dict.fromkeys(
+    [("ate", headline(m), "plugin_xgb_clip01") for m in RIESZ_ATE]
     + [("ate", "plugin_logit", "plugin_xgb_clip01")]
-    + [("ate", "plugin_xgb_rl_clip01", "plugin_xgb_clip01")]
+    # Clipping alpha-hat, against the same learner unclipped and against the
+    # plug-in clipped to the same bounds.
+    + [(b, f"{m}_clip{c}", ref)
+       for b, ms in [("ate", RIESZ_ATE), ("tsm", ["rieszboost", "rieszboost_kl"]), ("tsm_align", ["rieszboost", "rieszboost_kl"])]
+       for m in ms for c in ("01", "05") for ref in (m, f"plugin_xgb_clip{c}")]
+    + [("shift", f"{m}_clip{c}", ref) for m in ("rieszboost", "riesznet", "krrr") for c in ("01", "05")
+       for ref in (m, f"plugin_classif_clip{c}")]
     + [(b, a, ref) for b in ("tsm", "tsm_align")
        for a, ref in [("rieszboost_kl", "rieszboost"), ("rieszboost_kl", "plugin_xgb_clip01"),
-                      ("rieszboost", "plugin_xgb_clip01"), ("plugin_xgb_rl_clip01", "plugin_xgb_clip01")]]
-    + [("shift", m, ref) for ref in ("plugin_classif", "plugin_classif_clip05")
+                      ("rieszboost", "plugin_xgb_clip01")]]
+    + [("shift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
-)
+))
 
 
 def contrast_table(df, col):
@@ -573,8 +695,9 @@ def contrast_table(df, col):
             mean, se, z, reps = res
             sd = se * np.sqrt(reps)
             out.append({"block": block, "dgp": g, "n": n, "contrast": f"{a} - {b}", "diff": mean, "MCSE": se,
-                        "z": z, "reps": reps, "reps for |z|=3": int(np.ceil((3 * sd / mean) ** 2)) if mean else None})
-    return pd.DataFrame(out)
+                        "z": z, "reps": reps, "reps for |z|=3": int(np.ceil((3 * sd / mean) ** 2)) if mean and np.isfinite(sd) else None})
+    out = pd.DataFrame(out)
+    return out.astype({"reps for |z|=3": "Int64"}) if len(out) else out
 
 
 def load_psi(recs):
@@ -589,7 +712,15 @@ def load_psi(recs):
                 on the estimation sample;
       rem_tail  the part of rem from the 10% of units with the largest |alpha0|;
       *_semi    the semi-oracle: the same with mu-hat replaced by mu0, which
-                has zero bias, so its spread is alpha-hat's variance cost alone."""
+                has zero bias, so its spread is alpha-hat's variance cost alone;
+      s, B, shrink, resid
+                the split rem = s * B + mean[r e], with e = mu0 - mu-hat. s is
+                the least-squares fit through the origin of alpha-hat - alpha0
+                on -alpha0 (s > 0: alpha-hat shrunk toward zero), r the
+                residual alpha-hat - alpha0 + s alpha0, and B = -mean[alpha0 e],
+                which estimates E[m(mu-hat)] - psi0, the bias of the
+                outcome-only plug-in. B is shared by every alpha-hat in a
+                replicate; shrink = s * B and resid = mean[r e]."""
     keys = ("block", "dgp", "n", "rep")
     outcomes = {tuple(r[k] for k in keys): r for r in recs if r["method"] == "outcome" and "error" not in r}
     arrays = {}
@@ -603,12 +734,15 @@ def load_psi(recs):
         row = {**dict(zip(keys, key)), "variant": variant, "psi": psi, "se": se, "err": err,
                "sqerr": err**2, "cover": float(abs(err) <= 1.96 * se)}
         if "mu0" in o:
-            prod = (alpha - o["alpha0"]) * (o["mu0"] - o["mu"])
-            tail = np.abs(o["alpha0"]) >= np.quantile(np.abs(o["alpha0"]), 0.9)
+            a0, e = o["alpha0"], o["mu0"] - o["mu"]
+            prod = (alpha - a0) * e
+            tail = np.abs(a0) >= np.quantile(np.abs(a0), 0.9)
             phi_s = o["m_mu0"] + alpha * (o["y"] - o["mu0"])
             se_s, err_s = phi_s.std(ddof=1) / np.sqrt(len(phi_s)), phi_s.mean() - psi0
+            s, B = -np.sum((alpha - a0) * a0) / np.sum(a0**2), -np.mean(a0 * e)
             row.update(rem=prod.mean(), rem_tail=prod[tail].sum() / len(prod), err_semi=err_s,
-                       sqerr_semi=err_s**2, cover_semi=float(abs(err_s) <= 1.96 * se_s))
+                       sqerr_semi=err_s**2, cover_semi=float(abs(err_s) <= 1.96 * se_s),
+                       s=s, B=B, shrink=s * B, resid=np.mean((alpha - a0 + s * a0) * e))
         return row
 
     rows = []
@@ -621,36 +755,57 @@ def load_psi(recs):
         if r["method"] == "outcome":
             rows.append(one_step(key, "oracle", arrays[key]["alpha0"]))
             continue
-        a = np.load(task_path(*key, r["method"]).with_suffix(".npz"))
-        rows.extend(one_step(key, v, a[v]) for v in a.files)
+        a = dict(np.load(task_path(*key, r["method"]).with_suffix(".npz")))
+        m = r["method"]
+        if m in RIESZ and f"{m}_clip01" not in a:
+            # A Riesz task run before the clipped variants existed: clip its
+            # stored alpha-hat at the observed (A, X). Its alpha-hat RMSE on
+            # the test set needs a rerun.
+            cap = {c: _alpha_cap(BLOCKS[key[0]]["estimand"], c) for c in CLIPS}
+            a.update({f"{m}_clip{str(c)[2:]}": np.clip(a[m], -cap[c], cap[c]) for c in CLIPS})
+        rows.extend(one_step(key, v, alpha) for v, alpha in a.items())
     return pd.DataFrame(rows)
 
 
 def psi_table(sub):
     """Bias, empirical SE, RMSE, mean SE over empirical SE, and 95% coverage
-    of psi-hat, each a column block with methods side by side."""
+    of psi-hat, each a column block with methods side by side. Also two
+    measures a few drifting replicates cannot dominate, as they do the RMSE
+    (and a paired z, which then sits near -1 or 1): the median |error|, and
+    the number of blow-ups, replicates whose error is further than 5 times
+    the oracle's empirical SE from that method's median error in the same
+    cell (so a steady bias is not counted)."""
     g = sub.groupby(["dgp", "n", "variant"])
+    oracle_sd = sub[sub.variant == "oracle"].groupby(["dgp", "n"]).psi.std(ddof=1).rename("oracle_sd")
+    med = g.err.median().rename("med")
+    blow = (sub.join(oracle_sd, on=["dgp", "n"]).join(med, on=["dgp", "n", "variant"])
+            .assign(b=lambda d: (d.err - d.med).abs() > 5 * d.oracle_sd))
     t = pd.DataFrame({
         "bias": g.err.mean(),
         "empSE": g.psi.std(ddof=1),
         "RMSE": np.sqrt(g.sqerr.mean()),
         "SE/empSE": g.se.mean() / g.psi.std(ddof=1),
         "cover": g.cover.mean(),
+        "median |error|": g.err.apply(lambda e: e.abs().median()),
+        "blow-ups (error > 5 oracle empSE from its median)": blow.groupby(["dgp", "n", "variant"]).b.sum(),
     })
     return t
 
 
 def edge_table(recs):
     """Share of fits whose selected setting sits at the smallest or largest
-    value of a tuned hyperparameter, by block and method."""
+    value of a tuned hyperparameter, by block and method. A task's record
+    holds one selected setting per cross-fitting fold, and each counts as a fit."""
+    def bests(r):
+        return r["best"] if isinstance(r["best"], list) else [r["best"]]
     out = []
     for (block, method), grp in itertools.groupby(
-            sorted((r for r in recs if "error" not in r and r["best"]), key=lambda r: (r["block"], r["method"])),
+            sorted((r for r in recs if "error" not in r and any(bests(r))), key=lambda r: (r["block"], r["method"])),
             key=lambda r: (r["block"], r["method"])):
         grp = list(grp)
-        for hp in grp[0]["best"]:
+        for hp in bests(grp[0])[0]:
             vals = sorted({s[hp] for s in grp[0]["grid"]})
-            picks = [r["best"][hp] for r in grp]
+            picks = [b[hp] for r in grp for b in bests(r)]
             out.append({"block": block, "method": method, "hyperparameter": hp, "grid": vals,
                         "share at low": np.mean([p == vals[0] for p in picks]),
                         "share at high": np.mean([p == vals[-1] for p in picks]), "fits": len(picks)})
@@ -673,6 +828,16 @@ def cmd_summarize(args):
             print(f"\n== {block}: mean {col} of alpha-hat (MCSE), replicates: "
                   f"{sub.groupby(['dgp', 'n']).rep.nunique().min()}-{sub.groupby(['dgp', 'n']).rep.nunique().max()}")
             print(t.to_string())
+        # How often the cap on a Riesz learner's |alpha-hat| binds somewhere on the test set.
+        raw = sub[sub.variant.isin(list(RIESZ))]
+        if not raw.empty:
+            est = BLOCKS[block]["estimand"]
+            t = pd.DataFrame({f"cap {_alpha_cap(est, c):g} (clip{str(c)[2:]})":
+                              raw.assign(b=raw.max_abs_alpha_hat > _alpha_cap(est, c)).groupby(["dgp", "n", "variant"]).b.mean()
+                              for c in CLIPS})
+            t = t.unstack("variant").reindex([g for g in BLOCKS[block]["dgps"] if g in t.index.get_level_values(0)], level=0)
+            print(f"\n== {block}: share of Riesz fits whose |alpha-hat| exceeds the cap somewhere on the test set")
+            print(t.to_string(float_format=lambda v: f"{v:.2f}"))
         print(f"\n== {block}: seconds per task")
         print(sub.drop_duplicates(["dgp", "n", "rep", "method"]).groupby(["method", "n"]).seconds.mean().round(1).to_string())
     for col in ("rmse", "rmse_weak"):
@@ -710,17 +875,104 @@ def cmd_summarize(args):
                 "share of remainder from top-10% |alpha0|": g.rem_tail.mean() / g.rem.mean(),
                 "semi-oracle RMSE (true mu)": np.sqrt(g.sqerr_semi.mean()),
                 "semi-oracle coverage": g.cover_semi.mean(),
+                "shrinkage s": g.s.mean(),
+                "shrinkage term s*B": g.shrink.mean(),
+                "residual term mean[r e]": g.resid.mean(),
             })
             print(f"\n== {block}: remainder and semi-oracle, replicates: "
-                  f"{sub.dropna(subset=['rem']).groupby(['dgp', 'n']).rep.nunique().min()}")
+                  f"{sub.dropna(subset=['rem']).groupby(['dgp', 'n']).rep.nunique().min()}"
+                  f"\nremainder = s*B + mean[r e] (see load_psi); B, the outcome-only plug-in's bias, by cell:")
+            print(sub.dropna(subset=["rem"]).drop_duplicates(["dgp", "n", "rep"]).groupby(["dgp", "n"]).B.mean()
+                  .reindex(order, level=0).to_string(float_format=lambda v: f"{v:.3f}"))
             for col in r.columns:
                 w = r[col].unstack("variant").reindex(order, level=0)
                 w = w[["oracle"] + [c for c in w.columns if c != "oracle"]]
                 print(f"\n-- {col}")
                 print(w.to_string(float_format=lambda v: f"{v:.3f}"))
+            # B is shared within a replicate, so across methods a larger s should
+            # mean a larger remainder when B > 0 and a smaller one when B < 0.
+            v = r.index.get_level_values("variant")
+            est = r[v.isin([headline(m) for m in RIESZ]) | (v.str.startswith("plugin_") & v.str.endswith("_clip01"))]
+            print("\n-- across methods (Riesz learners, plug-ins clipped at 0.01), correlation of s with the remainder")
+            print(est.groupby(level=["dgp", "n"]).apply(
+                lambda c: np.corrcoef(c["shrinkage s"], c["remainder (bias given the fits)"])[0, 1])
+                .reindex(order, level=0).to_string(float_format=lambda v: f"{v:.2f}"))
     print("\n== paired contrasts in squared error of psi-hat (negative: the first method is better)")
     print(contrast_table(psi, "sqerr").to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     psi.to_csv(OUT / "psi.csv", index=False)
+    if args.compare:
+        compare(df, psi, Path(args.compare))
+
+
+def _paired_change(w, a, b):
+    """Mean of w[b] - w[a] over replicates and its paired z."""
+    d = (w[b] - w[a]).dropna()
+    se = d.std(ddof=1) / np.sqrt(len(d))
+    return d.mean(), d.mean() / se if se > 0 else np.nan
+
+
+def compare(df, psi, ref):
+    """Pair this run with an earlier one on the same datasets, e.g. results/pilot
+    (single-split tuning), replicate by replicate. Reads the earlier run's
+    rows.csv and psi.csv, written by its own summarize."""
+    keys = ["block", "dgp", "n", "rep", "variant"]
+    print(f"\n== comparison with {ref} (ref) on the same datasets")
+
+    def design(out):
+        p = next(out.rglob("rep000_outcome.json"), None)
+        return json.loads(p.read_text()).get("design", "split") if p else None
+    if design(OUT) != design(ref):
+        print(f"designs differ ({design(OUT)} here, {design(ref)} in ref): the replicates pair by seed, "
+              "and this run's sample is ref's training sample, but psi-hat is computed differently, "
+              "so the data check is skipped")
+    # The datasets must match: the estimation-sample outcomes, and the alpha-hat
+    # of the untuned logistic plug-in, which depends on the training sample only.
+    checked = bad = 0
+    for p in sorted(OUT.rglob("rep00[0-4]_outcome.npz")) if design(OUT) == design(ref) else []:
+        q = ref / p.relative_to(OUT)
+        if not q.exists():
+            continue
+        checked += 1
+        bad += not np.allclose(np.load(p)["y"], np.load(q)["y"], rtol=0, atol=1e-12)
+        pl, ql = (x.with_name(x.name.replace("outcome", "plugin_logit")) for x in (p, q))
+        if pl.exists() and ql.exists():
+            a, b = np.load(pl), np.load(ql)
+            bad += not all(np.allclose(a[k], b[k], rtol=0, atol=1e-10) for k in b.files)
+    print(f"pairing check: {checked} replicate cells, {bad} that differ by more than 1e-10")
+
+    rows = pd.read_csv(ref / "rows.csv")[keys + ["rmse"]].merge(df[keys + ["rmse"]], on=keys, suffixes=("_ref", ""))
+    out = []
+    for (b, v, g, n), c in rows.groupby(["block", "variant", "dgp", "n"]):
+        ch, z = _paired_change(c.set_index("rep"), "rmse_ref", "rmse")
+        out.append({"block": b, "variant": v, "dgp": g, "n": n, "ref": c.rmse_ref.mean(), "this run": c.rmse.mean(),
+                    "change": ch, "z": z, "reps": len(c)})
+    t = pd.DataFrame(out)
+    t = t[~t.variant.str.endswith(("_clip05", "_clip01")) | (t.variant == "plugin_xgb_clip01")]
+    print("\n-- alpha-hat RMSE, ref -> this run, paired (negative change: this run is better)")
+    print(t.set_index(["block", "variant", "dgp", "n"]).to_string(float_format=lambda v: f"{v:.3f}"))
+    # An untuned learner (the logistic plug-in) differs only by rounding, which a z would call resolved.
+    real = t.change.abs() > 1e-9
+    t["dir"] = np.where(real & (t.z <= -3), "better", np.where(real & (t.z >= 3), "worse", "unresolved"))
+    print("\n-- cells by resolved change (|z| >= 3)")
+    print(t.groupby(["variant", "dir"]).size().unstack(fill_value=0).to_string())
+
+    p = pd.read_csv(ref / "psi.csv")[keys + ["sqerr", "err", "cover"]].merge(
+        psi[keys + ["sqerr", "err", "cover"]], on=keys, suffixes=("_ref", ""))
+    REF = "plugin_xgb_clip01"
+    out = []
+    for (b, g, n), c in p.groupby(["block", "dgp", "n"]):
+        w = {col: c.pivot_table(index="rep", columns="variant", values=col) for col in ("sqerr_ref", "sqerr")}
+        for v, cv in c.groupby("variant"):
+            row = {"block": b, "dgp": g, "n": n, "variant": v,
+                   "RMSE ref": np.sqrt(cv.sqerr_ref.mean()), "RMSE": np.sqrt(cv.sqerr.mean()),
+                   "bias ref": cv.err_ref.mean(), "bias": cv.err.mean(),
+                   "cover ref": cv.cover_ref.mean(), "cover": cv.cover.mean()}
+            if REF in w["sqerr"] and v != REF:
+                row["z ref"] = _paired_change(w["sqerr_ref"], REF, v)[1]
+                row["z"] = _paired_change(w["sqerr"], REF, v)[1]
+            out.append(row)
+    print(f"\n-- psi-hat, ref -> this run; z is paired, on squared error, against {REF} (negative: better)")
+    print(pd.DataFrame(out).set_index(["block", "dgp", "n", "variant"]).to_string(float_format=lambda v: f"{v:.3f}"))
 
 
 def main():
@@ -734,7 +986,10 @@ def main():
     r.add_argument("--jobs", type=int, default=9)
     r.add_argument("--overwrite", action="store_true")
     r.add_argument("--shard", help="K/N: run only the tasks in shard K of N (0-based), for a job array")
-    sp.add_parser("summarize")
+    r.add_argument("--refit", action="store_true",
+                   help="refit finished Riesz tasks at their CV-chosen setting, to add newer variants")
+    s = sp.add_parser("summarize")
+    s.add_argument("--compare", help="an earlier run's results directory (e.g. results/pilot) to pair with")
     args = ap.parse_args()
     {"run": cmd_run, "summarize": cmd_summarize}[args.cmd](args)
 
