@@ -18,14 +18,28 @@ alone. The true psi0 is exact for a binary treatment and a 4M-draw Monte
 Carlo integral for the shift (dgp.true_psi).
 
 Blocks (see dgp.py for the DGPs):
-  ate    ATE at n = 1000, claims 1 and 2. Plug-ins (XGBoost and main-terms
-         logistic regression, each unclipped and clipped at 0.01 and 0.05)
-         and five Riesz learners.
-  tsm    TSM at A = 1, n in {250, 1000, 4000}, claim 3. rieszboost with the
-         squared and the KL loss, and the XGBoost plug-in.
-  shift  Additive shift by 0.5, n = 1000, claim 1. The classification density
-         ratio (unclipped and clipped at 0.01 and 0.05) and three Riesz
-         learners.
+  ate        ATE at n = 1000, claims 1 and 2. Plug-ins (XGBoost and main-terms
+             logistic regression, each unclipped and clipped at 0.01 and 0.05)
+             and five Riesz learners.
+  tsm        TSM at A = 1, n in {250, 1000, 4000}, claim 3. rieszboost with the
+             squared and the KL loss, and the XGBoost plug-in.
+  tsm_align  TSM at A = 1, n = 1000, on the weak-overlap alignment ladder: claim 3
+             where psi-hat depends on alpha-hat.
+  shift      Additive shift by 0.5, n = 1000, claim 1. The classification density
+             ratio (unclipped and clipped at 0.01 and 0.05) and three Riesz
+             learners.
+In the binary blocks, plugin_xgb_rl is the XGBoost propensity plug-in with its
+setting chosen by the held-out squared Riesz loss of the weights it implies
+(pi-hat clipped to [0.01, 0.99]) instead of by log loss: the same model class
+as plugin_xgb, tuned for the target that the Riesz learners are tuned for.
+
+For every alpha-hat the summary also reports, on the estimation sample:
+  * the remainder mean[(alpha-hat - alpha0)(mu0 - mu-hat)], which is the bias
+    of the one-step estimator given the fits, overall and the part from the 10%
+    of units with the largest |alpha0|;
+  * the semi-oracle: the one-step estimator with the true mu and that
+    alpha-hat. Its bias is zero, so it shows each alpha-hat's variance cost
+    alone.
 
 Tuning, the same for every learner: 5-fold cross-validation on the training
 sample. Each setting is fit on four folds and scored on the fifth, and the
@@ -82,11 +96,16 @@ BLOCKS = {
               "bulk_feature", "logistic", "smooth", "step", "sparse50", "additive", "interaction",
               "hard_unshared_1", "mix33_1", "mix67_1", "hard_shared_1",
               "hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
-        methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree", "forestriesz"]),
+        methods=["plugin_xgb", "plugin_xgb_rl", "plugin_logit", "rieszboost", "riesznet", "krrr",
+                 "riesztree", "forestriesz"]),
     "tsm": dict(
         estimand="TSM", ns=[250, 1000, 4000],
         dgps=["additive", "additive_g2", "interaction"],
-        methods=["plugin_xgb", "rieszboost", "rieszboost_kl"]),
+        methods=["plugin_xgb", "plugin_xgb_rl", "rieszboost", "rieszboost_kl"]),
+    "tsm_align": dict(
+        estimand="TSM", ns=[1000],
+        dgps=["hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
+        methods=["plugin_xgb", "plugin_xgb_rl", "rieszboost", "rieszboost_kl"]),
     "shift": dict(
         estimand="SHIFT", ns=[1000],
         dgps=list(D.SHIFT),
@@ -285,12 +304,25 @@ def _neg_log_loss(y, m, X):
     return -log_loss(y, m.predict_proba(X)[:, 1], labels=[0, 1])
 
 
-def _xgb_propensity(train, folds, covs):
+def _xgb_propensity(train, folds, covs, score=_neg_log_loss):
     import xgboost as xgb
 
     def make(**kw):
         return xgb.XGBClassifier(n_jobs=1, random_state=SEED, **kw)
-    return _xgb_tuned(make, train[covs], train["A"], folds, _neg_log_loss)
+    return _xgb_tuned(make, train[covs], train["A"], folds, score)
+
+
+def _neg_riesz_loss(estimand):
+    """Held-out score for a propensity model: minus the squared Riesz loss
+    alpha(A, X)^2 - 2 m(alpha)(X) of the weights it implies, pi-hat clipped
+    to [0.01, 0.99] as in the reference plug-in."""
+    def score(a, m, X):
+        a = np.asarray(a)
+        a1, a0 = _plugin_alpha(estimand, np.clip(m.predict_proba(X)[:, 1], 0.01, 0.99))
+        alpha = a * a1 + (1 - a) * a0
+        m_alpha = a1 - a0 if estimand == "ATE" else a1
+        return -float(np.mean(alpha**2 - 2 * m_alpha))
+    return score
 
 
 def _plugin_alpha(estimand, pi):
@@ -303,6 +335,8 @@ def _plugin_alpha(estimand, pi):
 def fit_plugin_binary(method, estimand, train, folds, covs):
     if method == "plugin_xgb":
         m, best, scores = _xgb_propensity(train, folds, covs)
+    elif method == "plugin_xgb_rl":
+        m, best, scores = _xgb_propensity(train, folds, covs, _neg_riesz_loss(estimand))
     else:
         from sklearn.linear_model import LogisticRegression
         m, best, scores = LogisticRegression(C=1e6, max_iter=2000).fit(train[covs], train["A"]), {}, []
@@ -377,6 +411,18 @@ def task_path(block, dgp_name, n, rep, method):
     return OUT / block / dgp_name / f"n{n}" / f"rep{rep:03d}_{method}.json"
 
 
+def _done(task):
+    """A task is done when its result file exists. An outcome task from before
+    mu0 was stored (needed for the remainder and the semi-oracle) is redone."""
+    path = task_path(*task)
+    if not path.exists():
+        return False
+    if task[4] == "outcome":
+        npz = path.with_suffix(".npz")
+        return npz.exists() and "mu0" in np.load(npz).files
+    return True
+
+
 def _mkdir(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
@@ -390,7 +436,8 @@ def _outcome_task(estimand, dgp_name, train, folds, est, covs):
     mu, m_mu = predict(est)
     X, a = est[covs].to_numpy(), est["A"].to_numpy()
     mu0, m0 = D._mu(a, X), D.m_mu0(estimand, a, X)
-    arrays = {"y": est["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X)}
+    arrays = {"y": est["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
+              "mu0": mu0, "m_mu0": m0}
     fields = {"rows": [], "rmse_mu": float(np.sqrt(np.mean((mu - mu0) ** 2))),
               "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": best, "grid": GRIDS["xgb"],
               "scores": scores}
@@ -460,7 +507,7 @@ def cmd_run(args):
         # shard on every submission, whatever the other arguments.
         k, n_shards = map(int, args.shard.split("/"))
         tasks = [t for t in tasks if zlib.crc32(repr(t).encode()) % n_shards == k]
-    tasks = [t for t in tasks if args.overwrite or not task_path(*t).exists()]
+    tasks = [t for t in tasks if args.overwrite or not _done(t)]
     tasks.sort(key=lambda t: -COST.get(t[4], 1) * t[2])
     print(f"{len(tasks)} tasks on {args.jobs} processes", flush=True)
     t0, done = time.time(), 0
@@ -506,8 +553,10 @@ RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "forestriesz"]
 CONTRASTS = (
     [("ate", m, "plugin_xgb_clip01") for m in RIESZ_ATE]
     + [("ate", "plugin_logit", "plugin_xgb_clip01")]
-    + [("tsm", "rieszboost_kl", "rieszboost"), ("tsm", "rieszboost_kl", "plugin_xgb_clip01"),
-       ("tsm", "rieszboost", "plugin_xgb_clip01")]
+    + [("ate", "plugin_xgb_rl_clip01", "plugin_xgb_clip01")]
+    + [(b, a, ref) for b in ("tsm", "tsm_align")
+       for a, ref in [("rieszboost_kl", "rieszboost"), ("rieszboost_kl", "plugin_xgb_clip01"),
+                      ("rieszboost", "plugin_xgb_clip01"), ("plugin_xgb_rl_clip01", "plugin_xgb_clip01")]]
     + [("shift", m, ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
 )
@@ -532,18 +581,35 @@ def load_psi(recs):
     """One row per (replicate, alpha-hat variant): the one-step estimate
     psi-hat = mean[m(mu-hat) + alpha-hat (Y - mu-hat)] on the estimation sample,
     its influence-function SE, and its error. The oracle plugs in alpha0 with
-    the same mu-hat."""
+    the same mu-hat.
+
+    With mu0 stored (outcome tasks from this version on), also:
+      rem       mean[(alpha-hat - alpha0)(mu0 - mu-hat)], the bias of psi-hat
+                given the fits (by the Riesz representation of m), estimated
+                on the estimation sample;
+      rem_tail  the part of rem from the 10% of units with the largest |alpha0|;
+      *_semi    the semi-oracle: the same with mu-hat replaced by mu0, which
+                has zero bias, so its spread is alpha-hat's variance cost alone."""
     keys = ("block", "dgp", "n", "rep")
     outcomes = {tuple(r[k] for k in keys): r for r in recs if r["method"] == "outcome" and "error" not in r}
     arrays = {}
 
     def one_step(key, variant, alpha):
         o = arrays[key]
+        psi0 = D.true_psi(key[1], BLOCKS[key[0]]["estimand"])
         phi = o["m_mu"] + alpha * (o["y"] - o["mu"])
         psi, se = phi.mean(), phi.std(ddof=1) / np.sqrt(len(phi))
-        err = psi - D.true_psi(key[1], BLOCKS[key[0]]["estimand"])
-        return {**dict(zip(keys, key)), "variant": variant, "psi": psi, "se": se, "err": err,
-                "sqerr": err**2, "cover": float(abs(err) <= 1.96 * se)}
+        err = psi - psi0
+        row = {**dict(zip(keys, key)), "variant": variant, "psi": psi, "se": se, "err": err,
+               "sqerr": err**2, "cover": float(abs(err) <= 1.96 * se)}
+        if "mu0" in o:
+            prod = (alpha - o["alpha0"]) * (o["mu0"] - o["mu"])
+            tail = np.abs(o["alpha0"]) >= np.quantile(np.abs(o["alpha0"]), 0.9)
+            phi_s = o["m_mu0"] + alpha * (o["y"] - o["mu0"])
+            se_s, err_s = phi_s.std(ddof=1) / np.sqrt(len(phi_s)), phi_s.mean() - psi0
+            row.update(rem=prod.mean(), rem_tail=prod[tail].sum() / len(prod), err_semi=err_s,
+                       sqerr_semi=err_s**2, cover_semi=float(abs(err_s) <= 1.96 * se_s))
+        return row
 
     rows = []
     for r in recs:
@@ -637,6 +703,21 @@ def cmd_summarize(args):
             w = w[["oracle"] + [c for c in w.columns if c != "oracle"]]
             print(f"\n-- {col}")
             print(w.to_string(float_format=lambda v: f"{v:.3f}"))
+        if "rem" in sub and sub.rem.notna().any():
+            g = sub.dropna(subset=["rem"]).groupby(["dgp", "n", "variant"])
+            r = pd.DataFrame({
+                "remainder (bias given the fits)": g.rem.mean(),
+                "share of remainder from top-10% |alpha0|": g.rem_tail.mean() / g.rem.mean(),
+                "semi-oracle RMSE (true mu)": np.sqrt(g.sqerr_semi.mean()),
+                "semi-oracle coverage": g.cover_semi.mean(),
+            })
+            print(f"\n== {block}: remainder and semi-oracle, replicates: "
+                  f"{sub.dropna(subset=['rem']).groupby(['dgp', 'n']).rep.nunique().min()}")
+            for col in r.columns:
+                w = r[col].unstack("variant").reindex(order, level=0)
+                w = w[["oracle"] + [c for c in w.columns if c != "oracle"]]
+                print(f"\n-- {col}")
+                print(w.to_string(float_format=lambda v: f"{v:.3f}"))
     print("\n== paired contrasts in squared error of psi-hat (negative: the first method is better)")
     print(contrast_table(psi, "sqerr").to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     psi.to_csv(OUT / "psi.csv", index=False)

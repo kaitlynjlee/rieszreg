@@ -628,8 +628,17 @@ under practical positivity violations.**
 ### Still to investigate
 
 1. **The mechanism of the crossover.** The hypothesis is that shrinking the
-   extreme weights adds bias exactly where μ̂ is wrong. Test it with a
-   semi-oracle: each α̂ paired with the true μ.
+   extreme weights adds bias exactly where μ̂ is wrong. **Now in the 5-fold CV
+   run.** For every α̂, the summary reports:
+   - the remainder mean[(α̂ − α₀)(μ₀ − μ̂)], which is ψ̂'s bias given the
+     fits, and the share of it that comes from the 10% of units with the
+     largest |α₀|;
+   - the semi-oracle (the true μ with each α̂), which shows α̂'s variance
+     cost alone.
+
+   The run also adds `plugin_xgb_rl`, the XGBoost plug-in tuned on the Riesz
+   loss of its implied weights instead of on log loss. It separates the
+   tuning loss from the model class.
 2. **Sample size.** Run the middle rungs at n = 4000, to see whether
    bias/SE shrinks or grows.
 3. **Coverage.** No estimated method reaches 0.95 on the middle rungs.
@@ -647,7 +656,9 @@ under practical positivity violations.**
      comparisons, since both sides are tuned this way.
 5. **Claim 3 on ψ̂.** Losses separate only on α̂ so far. They need a TSM DGP
    where the propensity and the outcome share structure, which is where α̂'s
-   quality reaches ψ̂.
+   quality reaches ψ̂. **Now in the 5-fold CV run** as the `tsm_align` block:
+   the TSM on the weak-overlap alignment ladder, n = 1000, with rieszboost
+   (squared and KL) and both plug-ins.
 6. **The shift block.** Two questions:
    - Does krrr's α̂ advantage reach ψ̂ when the shift DGP's exposure and
      outcome share structure?
