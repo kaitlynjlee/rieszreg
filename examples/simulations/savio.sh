@@ -30,8 +30,8 @@
 #   rsync -av savio:/global/scratch/users/<user>/rieszreg_sim/pilot_cv5 results/
 #
 #SBATCH --job-name=riesz_pilot_cv5
-#SBATCH --account=fc_rwmg
-#SBATCH --partition=savio3
+#SBATCH --account=co_biostat
+#SBATCH --partition=biostat_savio3_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
