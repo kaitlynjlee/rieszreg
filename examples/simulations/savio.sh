@@ -19,8 +19,11 @@
 # 4/5 of the sample. From the per-task times of the 5-fold CV run
 # (results/pilot_cv5), that is about 470 laptop core-hours, mostly rieszboost
 # (ATE, TSM). Savio has run these studies about 3x slower per core: roughly
-# 1,400 core-hours, or about 3 hours per array task over 16 tasks of 32
-# cores. A task that times out is finished by resubmitting.
+# 1,400 core-hours: 32 array tasks of 32 cores, about 1.4 hours each (2-hour
+# limit), at most 10 running at once (the %10 in --array), so about 5.5 hours
+# in all. Each shard starts its slowest tasks first. A task that times out is
+# finished by resubmitting. To change the split, change the --array range and
+# N_SHARDS together.
 #
 # Submit (from examples/simulations, so logs/ is created before Slurm opens it):
 #   mkdir -p logs && sbatch savio.sh
@@ -39,12 +42,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=6:00:00
-#SBATCH --array=0-15
+#SBATCH --time=2:00:00
+#SBATCH --array=0-31%10
 #SBATCH --output=logs/pilot_cf5_%A_%a.log
 
 set -euo pipefail
-N_SHARDS=${N_SHARDS:-16}         # must match the --array range (0 to N_SHARDS - 1)
+N_SHARDS=${N_SHARDS:-32}         # must match the --array range (0 to N_SHARDS - 1)
 REPS=${REPS:-0:50}
 MID_REPS=${MID_REPS:-50:200}
 SHARD="$SLURM_ARRAY_TASK_ID/$N_SHARDS"
