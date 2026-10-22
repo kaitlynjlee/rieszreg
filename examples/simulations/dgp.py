@@ -26,7 +26,14 @@ Claim 2, learners:
     sparse50     p = 50, rho = 1.2 X1 - 1.2 X2 + 1.5 (X3^2 - 1/3)
     additive     rho = sin(pi X1) + 1.5 (X2^2 - 1/3) - |X3| + 1/2 + 0.8 X4 - 0.6 X5
     interaction  rho = 2.5 X1 X2 X3 + 1.5 X4 X5
-The weak-overlap row of claim 2 is overlap_g2 and overlap_g3.
+    steps10      p = 20, rho = 0.6 sum_j s_j (1{X_j > c_j} - P(X_j > c_j)), j = 1..10
+The weak-overlap row of claim 2 is overlap_g2 and overlap_g3. steps10 is
+meant for rieszboost (see _steps10).
+
+The ATT and the local shift (LASE) use the same DGPs. The package fits the
+numerator of each, a partial estimand: E[A (mu(1, X) - mu(0, X))] for the
+ATT, and E[1(A < t) (mu(A + delta, X) - mu(A, X))] for the LASE, t =
+THRESHOLD. Dividing by E[A] or P(A < t) gives the estimand (see denominator).
 
 Hard representers, for the one-step estimator (see _hard_shared_1):
     hard_shared_{1,2}    rho = c f(X), f the outcome's baseline
@@ -59,6 +66,7 @@ import pandas as pd
 from scipy import stats
 
 DELTA = 0.5   # additive shift
+THRESHOLD = 0.0   # the LASE shifts only units with A < THRESHOLD (about half)
 
 
 def expit(x):
@@ -113,7 +121,22 @@ def m_mu0(estimand, a, X):
         return _mu(np.ones(len(X)), X) - _mu(np.zeros(len(X)), X)
     if estimand == "TSM":
         return _mu(np.ones(len(X)), X)
+    if estimand == "ATT":
+        return a * (_mu(np.ones(len(X)), X) - _mu(np.zeros(len(X)), X))
+    if estimand == "LOCALSHIFT":
+        return (a < THRESHOLD) * (_mu(a + DELTA, X) - _mu(a, X))
     return _mu(a + DELTA, X) - _mu(a, X)
+
+
+def denominator(estimand, a):
+    """Row by row, the denominator of a ratio estimand: A for the ATT,
+    1(A < t) for the LASE, and 1 for the others, whose numerator is the
+    estimand."""
+    if estimand == "ATT":
+        return np.asarray(a, dtype=float)
+    if estimand == "LOCALSHIFT":
+        return (np.asarray(a) < THRESHOLD).astype(float)
+    return np.ones(len(a))
 
 
 @lru_cache(maxsize=None)
@@ -123,16 +146,26 @@ def true_psi(dgp_name: str, estimand: str) -> float:
     X1 X2, X2 X3, 1{X4 > 0} X5, and the cosine of a sum, since E cos(pi U) =
     E sin(pi U) = 0), so the ATE = E tau = 1 and the TSM at A = 1 = E f + E tau
     = 1. For the shift the term nonlinear in a depends on the law of A, so
-    psi0 is integrated by Monte Carlo over 4M draws (MC SE about 2e-4)."""
+    psi0 is integrated by Monte Carlo over 4M draws (MC SE about 2e-4).
+    The ATT, E[pi(X) tau(X)] / E[pi(X)], and the LASE, the ratio of
+    m_mu0's mean to P(A < t), are integrated the same way."""
     if estimand in ("ATE", "TSM"):
         return 1.0
-    g = SHIFT[dgp_name]
+    g = DGPS[dgp_name]
     rng = np.random.default_rng(20261020)
-    vals = []
+    num, den = [], []
     for _ in range(4):
+        if estimand == "ATT":
+            X = _unif(g.p)(1_000_000, rng)
+            pi = g.propensity(X)
+            num.append(pi * _tau(X))
+            den.append(pi)
+            continue
         d = g.draw(1_000_000, rng)
-        vals.append(m_mu0("SHIFT", d["A"].to_numpy(), d[g.covariates].to_numpy()))
-    return float(np.concatenate(vals).mean())
+        a = d["A"].to_numpy()
+        num.append(m_mu0(estimand, a, d[g.covariates].to_numpy()))
+        den.append(denominator(estimand, a))
+    return float(np.concatenate(num).mean() / np.concatenate(den).mean())
 
 
 def _outcome_diagnostics(d, covariates) -> dict:
@@ -178,6 +211,8 @@ class BinaryDGP:
             return a / pi - (1 - a) / (1 - pi)
         if estimand == "TSM":
             return a / pi
+        if estimand == "ATT":
+            return a - (1 - a) * pi / (1 - pi)
         raise ValueError(estimand)
 
     def diagnose(self, n: int = 1_000_000, seed: int = 1) -> dict:
@@ -206,6 +241,8 @@ class BinaryDGP:
             "ATE 99.9% |alpha0|": np.quantile(np.abs(ate), 0.999),
             "TSM max alpha0": tsm.max(),
             "TSM sd(alpha0)": tsm.std(),
+            "ATT max|alpha0|": np.abs(self.true_alpha("ATT", a, X)).max(),
+            "ATT sd(alpha0)": self.true_alpha("ATT", a, X).std(),
             **_outcome_diagnostics(d, self.covariates),
         }
 
@@ -303,6 +340,22 @@ def _interaction(X):
     return 2.5 * x1 * x2 * x3 + 1.5 * x4 * x5
 
 
+# steps10, meant for rieszboost: ten centred steps in X1..X10, with signs
+# alternating so P(A = 1) is 1/2, among 20 covariates. The scale 0.6 matches
+# overlap_g1's overlap (sd(logit) 0.88 against 0.88, sd(alpha0) 2.23 against
+# 2.22, no units with min(pi, 1 - pi) < 0.05), where krrr wins, so only the
+# shape changes. Boosting fits an additive sum of steps with one shallow tree
+# per term and selects the ten variables. An isotropic kernel (krrr) smears
+# the jumps and weighs all 20 dimensions; one tree (riesztree) or a forest
+# has to build ten additive terms out of interactions.
+_STEP_CUTS = np.array([-0.6, -0.3, 0.0, 0.3, 0.6, -0.45, -0.15, 0.15, 0.45, 0.0])
+_STEP_SIGNS = np.array([1, -1, 1, -1, 1, -1, 1, -1, 1, -1])
+
+
+def _steps10(X):
+    return 0.6 * ((X[:, :10] > _STEP_CUTS) - (1 - _STEP_CUTS) / 2) @ _STEP_SIGNS
+
+
 BINARY = {d.name: d for d in [
     BinaryDGP("overlap_g05", 5, _g05),
     BinaryDGP("overlap_g1", 5, _g1),
@@ -317,6 +370,7 @@ BINARY = {d.name: d for d in [
     BinaryDGP("additive", 5, _additive),
     BinaryDGP("additive_g2", 5, _additive_g2),
     BinaryDGP("interaction", 5, _interaction),
+    BinaryDGP("steps10", 20, _steps10),
     BinaryDGP("hard_shared_1", 5, _hard_shared_1),
     BinaryDGP("hard_shared_2", 5, _hard_shared_2),
     BinaryDGP("hard_unshared_1", 5, _hard_unshared_1),
@@ -379,8 +433,15 @@ class ShiftDGP:
         return self.eps_pdf((a - _shift_mean(X)) / s) / s
 
     def true_alpha(self, estimand: str, a, X):
-        assert estimand == "SHIFT"
-        return self.density(a - DELTA, X) / self.density(a, X) - 1.0
+        """SHIFT: r(a, x) - 1, with r(a, x) = p(a - delta | x) / p(a | x).
+        LOCALSHIFT: 1(a < t + delta) r(a, x) - 1(a < t), the representer of
+        the LASE's numerator (substitute a -> a - delta in E[1(A < t)
+        mu(A + delta, X)])."""
+        r = self.density(a - DELTA, X) / self.density(a, X)
+        if estimand == "SHIFT":
+            return r - 1.0
+        assert estimand == "LOCALSHIFT"
+        return (a < THRESHOLD + DELTA) * r - (a < THRESHOLD)
 
     def diagnose(self, n: int = 1_000_000, seed: int = 1) -> dict:
         d = self.draw(n, np.random.default_rng(seed))
@@ -394,6 +455,9 @@ class ShiftDGP:
             "99.9% |alpha0|": np.quantile(np.abs(alpha), 0.999),
             "share alpha0 > 3": np.mean(alpha > 3),
             "psi0": true_psi(self.name, "SHIFT"),
+            "P(A < t)": np.mean(a < THRESHOLD),
+            "LASE max|alpha0|": np.abs(self.true_alpha("LOCALSHIFT", a, X)).max(),
+            "LASE psi0": true_psi(self.name, "LOCALSHIFT"),
             **_outcome_diagnostics(d, self.covariates),
         }
 

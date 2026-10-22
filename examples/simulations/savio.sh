@@ -3,7 +3,8 @@
 # inside each fold (results go to pilot_cf5). Each array task runs a
 # fixed shard of the task list (pilot.py run --shard K/N) on 32 cores, one
 # single-threaded process per core:
-#   1. 50 replicates of every DGP in every block (ate, tsm, shift);
+#   1. 50 replicates of every DGP in every block (ate, tsm, tsm_align, shift,
+#      att, localshift);
 #   2. replicates 50-199 of the four middle rungs of the alignment ladder.
 # Tasks resume: a task whose result file exists is skipped, so resubmitting
 # the same array fills only the gaps (e.g. after a timeout).
@@ -24,6 +25,12 @@
 # in all. Each shard starts its slowest tasks first. A task that times out is
 # finished by resubmitting. To change the split, change the --array range and
 # N_SHARDS together.
+#
+# Added 2026-10-22: the att and localshift blocks and the steps10 DGP (ATE and
+# ATT). Resubmitting runs only those tasks, since the rest are done. From the
+# per-task Savio times of pilot_cf5, about 300 core-hours, three quarters of
+# it rieszboost: 32 array tasks of about 10 core-hours, so about 20-40 minutes
+# each on 32 cores, and about 1.5 hours in all at 10 at a time.
 #
 # Submit (from examples/simulations, so logs/ is created before Slurm opens it):
 #   mkdir -p logs && sbatch savio.sh

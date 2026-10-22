@@ -34,6 +34,14 @@ Blocks (see dgp.py for the DGPs):
   shift      Additive shift by 0.5, n = 1000, claim 1. The classification density
              ratio (unclipped and clipped at 0.01 and 0.05) and three Riesz
              learners.
+  att        ATT at n = 1000, on the ATE block's DGPs outside the alignment
+             ladder, with the ATE block's methods.
+  localshift LASE of the shift by 0.5 among units with A < 0 (dgp.THRESHOLD),
+             n = 1000, with the shift block's methods.
+The ATT and the LASE are ratios: the package fits the representer of the
+numerator, and the one-step estimator divides by the mean of the
+denominator (see load_psi). steps10 is an ATE and ATT DGP meant for
+rieszboost (see dgp._steps10).
 The ATE block has two forests: AugForestRieszRegressor (augforestriesz), the
 package's recommended forest, and ForestRieszRegressor (forestriesz), the
 ForestRiesz of Chernozhukov et al. (2022). Results up to 2026-10-21 also had
@@ -115,7 +123,7 @@ BLOCKS = {
         estimand="ATE", ns=[1000],
         dgps=["overlap_g05", "overlap_g1", "overlap_g2", "overlap_g3", "tail_feature",
               "bulk_feature", "logistic", "smooth", "step", "sparse50", "additive", "interaction",
-              "hard_unshared_1", "mix33_1", "mix67_1", "hard_shared_1",
+              "steps10", "hard_unshared_1", "mix33_1", "mix67_1", "hard_shared_1",
               "hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
         methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree",
                  "augforestriesz", "forestriesz"]),
@@ -131,7 +139,21 @@ BLOCKS = {
         estimand="SHIFT", ns=[1000],
         dgps=list(D.SHIFT),
         methods=["plugin_classif", "rieszboost", "riesznet", "krrr"]),
+    "att": dict(
+        estimand="ATT", ns=[1000],
+        dgps=["overlap_g05", "overlap_g1", "overlap_g2", "overlap_g3", "tail_feature",
+              "bulk_feature", "logistic", "smooth", "step", "sparse50", "additive", "interaction",
+              "steps10"],
+        methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree",
+                 "augforestriesz", "forestriesz"]),
+    "localshift": dict(
+        estimand="LOCALSHIFT", ns=[1000],
+        dgps=list(D.SHIFT),
+        methods=["plugin_classif", "rieszboost", "riesznet", "krrr"]),
 }
+# Estimands with a continuous exposure: alpha-hat is evaluated at the observed
+# (A, X), not as the pair (alpha-hat(1, x), alpha-hat(0, x)).
+CONTINUOUS = ("SHIFT", "LOCALSHIFT")
 
 
 def _grid(**axes):
@@ -226,19 +248,25 @@ def test_data(dgp_name, estimand):
     d = g.draw(N_TEST, np.random.default_rng([BASE_SEED, zlib.crc32(dgp_name.encode()), 0, 10**6]))
     X, a = d[g.covariates].to_numpy(), d["A"].to_numpy()
     alpha0 = g.true_alpha(estimand, a, X)
-    if estimand == "SHIFT":
+    if estimand in CONTINUOUS:
         return d, alpha0, np.abs(alpha0) > 3, None
     pi = g.propensity(X)
-    weak = (np.minimum(pi, 1 - pi) if estimand == "ATE" else pi) < 0.05
+    # Where alpha0 is large: both tails for the ATE, pi near 1 for the ATT
+    # (alpha0(0, x) = -pi / (1 - pi)), pi near 0 for the TSM.
+    weak = (np.minimum(pi, 1 - pi) if estimand == "ATE" else 1 - pi if estimand == "ATT" else pi) < 0.05
     return d, alpha0, weak, pi
 
 
 def _estimand(estimand, covs):
-    from rieszreg import ATE, TSM, AdditiveShift
+    from rieszreg import ATE, ATT, TSM, AdditiveShift, LocalShift
     if estimand == "ATE":
         return ATE(treatment="A", covariates=tuple(covs))
+    if estimand == "ATT":
+        return ATT(treatment="A", covariates=tuple(covs))
     if estimand == "TSM":
         return TSM(level=1.0, treatment="A", covariates=tuple(covs))
+    if estimand == "LOCALSHIFT":
+        return LocalShift(delta=D.DELTA, threshold=D.THRESHOLD, treatment="A", covariates=tuple(covs))
     return AdditiveShift(delta=D.DELTA, treatment="A", covariates=tuple(covs))
 
 
@@ -324,7 +352,7 @@ def fit_riesz(method, estimand, train, folds, covs, best=None, scores=None):
 
     def predict(df):
         Z = df[cols]
-        if estimand == "SHIFT":
+        if estimand in CONTINUOUS:
             alpha = m.predict(Z)
         else:
             alpha = (m.predict(Z.assign(A=1.0)), m.predict(Z.assign(A=0.0)))
@@ -340,9 +368,12 @@ CLIPS = (0.01, 0.05)
 
 def _alpha_cap(estimand, c):
     """The largest |alpha-hat| of a plug-in whose probability is clipped to
-    [c, 1 - c]: 1 / c for the ATE and TSM, (1 - c) / c - 1 for the shift
-    classifier (100 and 98 at c = 0.01)."""
-    return (1 - c) / c - 1.0 if estimand == "SHIFT" else 1.0 / c
+    [c, 1 - c]: 1 / c for the ATE and TSM, (1 - c) / c for the ATT (pi / (1 -
+    pi)) and the LASE (the odds itself, for t <= a < t + delta), and
+    (1 - c) / c - 1 for the shift classifier (100, 99 and 98 at c = 0.01)."""
+    if estimand == "SHIFT":
+        return (1 - c) / c - 1.0
+    return (1 - c) / c if estimand in ("ATT", "LOCALSHIFT") else 1.0 / c
 
 
 def _clip_alpha(estimand, alpha, c):
@@ -357,7 +388,7 @@ def _clip_alpha(estimand, alpha, c):
     The cap is the same for both arms, so it applies to alpha-hat at the
     observed (A, X) as it is."""
     cap = _alpha_cap(estimand, c)
-    if estimand == "SHIFT":
+    if estimand in CONTINUOUS:
         return np.clip(alpha, -cap, cap)
     return tuple(np.clip(v, -cap, cap) for v in alpha)
 
@@ -393,6 +424,8 @@ def _plugin_alpha(estimand, pi):
     """(alpha(1, x), alpha(0, x)) implied by a propensity score."""
     if estimand == "ATE":
         return 1 / pi, -1 / (1 - pi)
+    if estimand == "ATT":
+        return np.ones_like(pi), -pi / (1 - pi)
     return 1 / pi, np.zeros_like(pi)
 
 
@@ -416,7 +449,8 @@ def fit_plugin_classif(method, estimand, train, folds, covs):
     """Density ratio by classification, as in ../lee_schuler_10cov_shift: an
     XGBoost classifier of observed rows (A, X), labelled 1, against shifted rows
     (A + delta, X), labelled 0. The classes are balanced, so the odds
-    (1 - p) / p estimate p(a - delta | x) / p(a | x), and alpha = odds - 1.
+    (1 - p) / p estimate r(a, x) = p(a - delta | x) / p(a | x), and alpha =
+    r - 1 (for the LASE, 1(a < t + delta) r - 1(a < t); see dgp.ShiftDGP).
     The folds are by unit, so both rows of a unit fall in the same fold.
     Tuned by held-out log loss, with p-hat also clipped to [c, 1 - c] as for
     the propensity plug-in."""
@@ -432,10 +466,14 @@ def fit_plugin_classif(method, estimand, train, folds, covs):
 
     def predict(df):
         p = m.predict_proba(df[cols])[:, 1]
-        out = {method: (1 - p) / np.clip(p, 1e-12, None) - 1.0}
+        a = df["A"].to_numpy()
+
+        def alpha(r):
+            return r - 1.0 if estimand == "SHIFT" else (a < D.THRESHOLD + D.DELTA) * r - (a < D.THRESHOLD)
+        out = {method: alpha((1 - p) / np.clip(p, 1e-12, None))}
         for c in CLIPS:
             q = np.clip(p, c, 1 - c)
-            out[f"{method}_clip{str(c)[2:]}"] = (1 - q) / q - 1.0
+            out[f"{method}_clip{str(c)[2:]}"] = alpha((1 - q) / q)
         return out
     return predict, best, scores
 
@@ -444,8 +482,9 @@ def fit_outcome(estimand, train, folds, covs):
     """The outcome regression mu-hat(a, x), shared by every alpha-hat in a
     replicate: XGBoost on (A, X), tuned by held-out squared error. Returns
     predict(df) -> (mu-hat(A, X), m(mu-hat)(X)), the second being
-    mu-hat(1, X) - mu-hat(0, X) for the ATE, mu-hat(1, X) for the TSM, and
-    mu-hat(A + delta, X) - mu-hat(A, X) for the shift."""
+    mu-hat(1, X) - mu-hat(0, X) for the ATE, mu-hat(1, X) for the TSM,
+    mu-hat(A + delta, X) - mu-hat(A, X) for the shift, and those times A (ATT)
+    or 1(A < t) (LASE) for the ratio estimands' numerators."""
     import xgboost as xgb
     cols = ["A"] + covs
 
@@ -463,6 +502,10 @@ def fit_outcome(estimand, train, folds, covs):
             return mu, m.predict(Z.assign(A=1.0)) - m.predict(Z.assign(A=0.0))
         if estimand == "TSM":
             return mu, m.predict(Z.assign(A=1.0))
+        if estimand == "ATT":
+            return mu, Z["A"].to_numpy() * (m.predict(Z.assign(A=1.0)) - m.predict(Z.assign(A=0.0)))
+        if estimand == "LOCALSHIFT":
+            return mu, (Z["A"].to_numpy() < D.THRESHOLD) * (m.predict(Z.assign(A=Z["A"] + D.DELTA)) - mu)
         return mu, m.predict(Z.assign(A=Z["A"] + D.DELTA)) - mu
     return predict, best, scores
 
@@ -506,7 +549,7 @@ def _outcome_task(estimand, dgp_name, d, cf, inner, covs):
     X, a = d[covs].to_numpy(), d["A"].to_numpy()
     mu0, m0 = D._mu(a, X), D.m_mu0(estimand, a, X)
     arrays = {"y": d["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
-              "mu0": mu0, "m_mu0": m0}
+              "mu0": mu0, "m_mu0": m0, "w": D.denominator(estimand, a)}
     fields = {"rows": [], "rmse_mu": float(np.sqrt(np.mean((mu - mu0) ** 2))),
               "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": bests, "grid": GRIDS["xgb"],
               "scores": scores}
@@ -563,7 +606,7 @@ def run_task(block, dgp_name, n, rep, method, refit=False):
             scores.append(s)
             # Out-of-fold alpha-hat at the observed (A, X), for the one-step estimator.
             for v, a in predict(d[~tr]).items():
-                on_est.setdefault(v, np.empty(n))[~tr] = (a if estimand == "SHIFT"
+                on_est.setdefault(v, np.empty(n))[~tr] = (a if estimand in CONTINUOUS
                                                          else a_obs[~tr] * a[0] + (1 - a_obs[~tr]) * a[1])
             fold_rows.append(_alpha_rows(predict(test), dgp_name, estimand, test, covs, alpha0, weak, pi))
         np.savez(_mkdir(path).with_suffix(".npz"), **on_est)
@@ -681,6 +724,11 @@ CONTRASTS = list(dict.fromkeys(
                       ("rieszboost", "plugin_xgb_clip01")]]
     + [("shift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
+    # The ratio estimands, against the same references as the ATE and the shift.
+    + [("att", headline(m), "plugin_xgb_clip01") for m in RIESZ_ATE]
+    + [("att", "plugin_logit", "plugin_xgb_clip01")]
+    + [("localshift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
+       for m in ("rieszboost", "riesznet", "krrr")]
 ))
 
 
@@ -702,9 +750,13 @@ def contrast_table(df, col):
 
 def load_psi(recs):
     """One row per (replicate, alpha-hat variant): the one-step estimate
-    psi-hat = mean[m(mu-hat) + alpha-hat (Y - mu-hat)] on the estimation sample,
-    its influence-function SE, and its error. The oracle plugs in alpha0 with
-    the same mu-hat.
+    psi-hat = mean[m(mu-hat) + alpha-hat (Y - mu-hat)] / mean[w] on the estimation sample,
+    its influence-function SE, and its error. w is the denominator of a ratio
+    estimand (A for the ATT, 1(A < t) for the LASE; dgp.denominator), and 1
+    otherwise, so psi-hat is the numerator's one-step estimate over mean[w]
+    and its influence function is (phi - psi-hat w) / mean[w]. The remainder,
+    the semi-oracle and B below are divided by mean[w] the same way. The
+    oracle plugs in alpha0 with the same mu-hat.
 
     With mu0 stored (outcome tasks from this version on), also:
       rem       mean[(alpha-hat - alpha0)(mu0 - mu-hat)], the bias of psi-hat
@@ -728,8 +780,11 @@ def load_psi(recs):
     def one_step(key, variant, alpha):
         o = arrays[key]
         psi0 = D.true_psi(key[1], BLOCKS[key[0]]["estimand"])
+        w = o["w"] if "w" in o else np.ones(len(o["y"]))
+        wbar = w.mean()
         phi = o["m_mu"] + alpha * (o["y"] - o["mu"])
-        psi, se = phi.mean(), phi.std(ddof=1) / np.sqrt(len(phi))
+        psi = phi.mean() / wbar
+        se = (phi - psi * w).std(ddof=1) / wbar / np.sqrt(len(phi))
         err = psi - psi0
         row = {**dict(zip(keys, key)), "variant": variant, "psi": psi, "se": se, "err": err,
                "sqerr": err**2, "cover": float(abs(err) <= 1.96 * se)}
@@ -738,11 +793,12 @@ def load_psi(recs):
             prod = (alpha - a0) * e
             tail = np.abs(a0) >= np.quantile(np.abs(a0), 0.9)
             phi_s = o["m_mu0"] + alpha * (o["y"] - o["mu0"])
-            se_s, err_s = phi_s.std(ddof=1) / np.sqrt(len(phi_s)), phi_s.mean() - psi0
-            s, B = -np.sum((alpha - a0) * a0) / np.sum(a0**2), -np.mean(a0 * e)
-            row.update(rem=prod.mean(), rem_tail=prod[tail].sum() / len(prod), err_semi=err_s,
+            psi_s = phi_s.mean() / wbar
+            se_s, err_s = (phi_s - psi_s * w).std(ddof=1) / wbar / np.sqrt(len(phi_s)), psi_s - psi0
+            s, B = -np.sum((alpha - a0) * a0) / np.sum(a0**2), -np.mean(a0 * e) / wbar
+            row.update(rem=prod.mean() / wbar, rem_tail=prod[tail].sum() / len(prod) / wbar, err_semi=err_s,
                        sqerr_semi=err_s**2, cover_semi=float(abs(err_s) <= 1.96 * se_s),
-                       s=s, B=B, shrink=s * B, resid=np.mean((alpha - a0 + s * a0) * e))
+                       s=s, B=B, shrink=s * B, resid=np.mean((alpha - a0 + s * a0) * e) / wbar)
         return row
 
     rows = []
