@@ -34,14 +34,11 @@
 # Coverage near 0.95 has a Monte Carlo SE of about 0.015 at 200 replicates and
 # 0.010 at 500.
 #
-# Account: the faculty computing allowance fc_rwmg (savio_normal QOS), which
-# has more savio3 nodes than the co_biostat condo. It charges service units:
-# Savio bills whole nodes, so roughly the core-hours above (about 1,250 for
-# 200 replicates; check the savio3 rate and the balance first, e.g.
-# check_usage.sh -a fc_rwmg). To use the condo instead, set --account=co_biostat
-# --qos=biostat_savio3_normal; the condo is free but has fewer nodes.
-# Coverage near 0.95 has a Monte Carlo SE of about 0.015 at 200 replicates and
-# 0.010 at 500.
+# Account: the co_biostat condo on savio3 (condo priority, no service-unit
+# charge), 8 array tasks at a time; at most as many run as the condo has free
+# nodes. To use the faculty allowance instead, set --account=fc_rwmg
+# --qos=savio_normal; it has more nodes but charges service units (roughly
+# the core-hours above).
 #
 # Submit (from examples/simulations, so logs/ exists before Slurm opens it):
 #   mkdir -p logs && sbatch savio_final.sh
@@ -49,9 +46,9 @@
 #   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim RIESZ_SIM_RUN=final_split uv run python pilot.py summarize
 #
 #SBATCH --job-name=riesz_final_split
-#SBATCH --account=fc_rwmg
+#SBATCH --account=co_biostat
 #SBATCH --partition=savio3
-#SBATCH --qos=savio_normal
+#SBATCH --qos=biostat_savio3_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
