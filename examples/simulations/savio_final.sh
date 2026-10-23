@@ -27,10 +27,10 @@
 # quarters of it rieszboost; the smoke run suggests nearer 5 times.
 #   200 replicates (the default): about 1,250 core-hours. 32 array tasks of
 #   about 39 core-hours, so about 1.2 hours each on 32 cores (3-hour limit),
-#   20 at a time: about 2.5 hours in all, plus queue time.
+#   8 at a time: about 5 hours in all, plus queue time.
 #   500 replicates: about 3,100 core-hours. After the 200, extend with
-#     mkdir -p logs && REPS=200:500 N_SHARDS=48 sbatch --array=0-47%20 savio_final.sh
-#   (about 2.5 hours more), or run 0:500 at once with N_SHARDS=80, --array=0-79%20.
+#     mkdir -p logs && REPS=200:500 N_SHARDS=48 sbatch --array=0-47%8 savio_final.sh
+#   (about 7 hours more), or run 0:500 at once with N_SHARDS=80, --array=0-79%8.
 # Coverage near 0.95 has a Monte Carlo SE of about 0.015 at 200 replicates and
 # 0.010 at 500.
 #
@@ -56,7 +56,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --time=3:00:00
-#SBATCH --array=0-31%20
+#SBATCH --array=0-31%8
 #SBATCH --output=logs/final_split_%A_%a.log
 
 set -euo pipefail
