@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Savio job array for the final run of pilot.py (results go to final_cf5, not
-# pilot_cf5): 5-fold cross-fitting with 5-fold CV tuning inside each fold, on
-# the blocks and DGPs of the paper (AIMS.md sections 1-3):
+# Savio job array for the final run of pilot.py (results go to final_split,
+# not pilot_cf5): sample splitting, as in pilot_cv5. Every learner is tuned by
+# 5-fold CV and fit on a training sample of n, and psi-hat is computed on an
+# independent estimation sample of n (see pilot.py's docstring). On the blocks
+# and DGPs of the paper (AIMS.md sections 1-3):
 #   ate, att    the 13 DGPs outside the alignment ladder, n = 1000;
 #   tsm         additive, additive_g2, interaction, n = 250, 1000, 4000, with
 #               riesznet, krrr and forestriesz added for the rate across learners;
@@ -16,38 +18,49 @@
 # packages/, check the compiled riesztree is current:
 #   uv run python -c "from riesztree.fast._grow_c import GrowableFlatTree as G; print('n_aug' in dir(G))"
 #
-# Cost, from the per-task Savio times of pilot_cf5, scaled for the grids moved
-# for this run (rieszboost 30 settings instead of 25, riesznet 8 instead of
-# 6), plus the TSM block's three new learners (timed on the laptop, where a
-# whole krrr task at n = 4000 takes under a minute): about 24 core-hours per
-# replicate, three quarters of it rieszboost.
-#   200 replicates (the default): about 4,700 core-hours. 96 array tasks of
-#   about 49 core-hours, so about 1.5 hours each on 32 cores (3-hour limit),
-#   10 at a time: about 15 hours in all.
-#   500 replicates: about 11,800 core-hours. After the 200, extend with
-#     mkdir -p logs && REPS=200:500 N_SHARDS=144 sbatch --array=0-143%10 savio_final.sh
-#   (about 22 hours more), or run 0:500 at once with N_SHARDS=240, --array=0-239%10.
+# Cost. With pilot_cf5's design (cross-fitting with nested tuning) this run
+# would take about 24 core-hours per replicate, from pilot_cf5's per-task
+# Savio times scaled for the moved grids and the TSM block's new learners.
+# Sample splitting tunes once and fits once, about 3.8 times fewer fits
+# (rieszboost: 5 x 30 tuning fits on 4n/5 plus one fit on n, against 25 x 30
+# on 16n/25 plus 5 on 4n/5), so about 6.3 core-hours per replicate, three
+# quarters of it rieszboost; the smoke run suggests nearer 5 times.
+#   200 replicates (the default): about 1,250 core-hours. 32 array tasks of
+#   about 39 core-hours, so about 1.2 hours each on 32 cores (3-hour limit),
+#   20 at a time: about 2.5 hours in all, plus queue time.
+#   500 replicates: about 3,100 core-hours. After the 200, extend with
+#     mkdir -p logs && REPS=200:500 N_SHARDS=48 sbatch --array=0-47%20 savio_final.sh
+#   (about 2.5 hours more), or run 0:500 at once with N_SHARDS=80, --array=0-79%20.
+# Coverage near 0.95 has a Monte Carlo SE of about 0.015 at 200 replicates and
+# 0.010 at 500.
+#
+# Account: the faculty computing allowance fc_rwmg (savio_normal QOS), which
+# has more savio3 nodes than the co_biostat condo. It charges service units:
+# Savio bills whole nodes, so roughly the core-hours above (about 1,250 for
+# 200 replicates; check the savio3 rate and the balance first, e.g.
+# check_usage.sh -a fc_rwmg). To use the condo instead, set --account=co_biostat
+# --qos=biostat_savio3_normal; the condo is free but has fewer nodes.
 # Coverage near 0.95 has a Monte Carlo SE of about 0.015 at 200 replicates and
 # 0.010 at 500.
 #
 # Submit (from examples/simulations, so logs/ exists before Slurm opens it):
 #   mkdir -p logs && sbatch savio_final.sh
 # Then, on a login node:
-#   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim RIESZ_SIM_RUN=final_cf5 uv run python pilot.py summarize
+#   RIESZ_SIM_OUT=/global/scratch/users/$USER/rieszreg_sim RIESZ_SIM_RUN=final_split uv run python pilot.py summarize
 #
-#SBATCH --job-name=riesz_final_cf5
-#SBATCH --account=co_biostat
+#SBATCH --job-name=riesz_final_split
+#SBATCH --account=fc_rwmg
 #SBATCH --partition=savio3
-#SBATCH --qos=biostat_savio3_normal
+#SBATCH --qos=savio_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --time=3:00:00
-#SBATCH --array=0-95%10
-#SBATCH --output=logs/final_cf5_%A_%a.log
+#SBATCH --array=0-31%20
+#SBATCH --output=logs/final_split_%A_%a.log
 
 set -euo pipefail
-N_SHARDS=${N_SHARDS:-96}         # must match the --array range (0 to N_SHARDS - 1)
+N_SHARDS=${N_SHARDS:-32}         # must match the --array range (0 to N_SHARDS - 1)
 REPS=${REPS:-0:200}
 SHARD="$SLURM_ARRAY_TASK_ID/$N_SHARDS"
 BLOCKS="ate att tsm shift localshift"
@@ -56,7 +69,7 @@ DGPS="overlap_g05 overlap_g1 overlap_g2 overlap_g3 tail_feature bulk_feature log
       shift_gauss shift_hetero shift_skew shift_bimodal"
 
 export RIESZ_SIM_OUT=${RIESZ_SIM_OUT:-/global/scratch/users/$USER/rieszreg_sim}
-export RIESZ_SIM_RUN=final_cf5
+export RIESZ_SIM_RUN=final_split
 export UV_CACHE_DIR=${UV_CACHE_DIR:-/global/scratch/users/$USER/.uv-cache}
 export PYTHONUNBUFFERED=1
 

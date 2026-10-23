@@ -8,20 +8,20 @@ only Monte Carlo noise in the measure comes from X. It is also reported on the
 weak-overlap rows of the test set alone: min(pi, 1 - pi) < 0.05 for the ATE,
 pi < 0.05 for the TSM, |alpha0| > 3 for the shift.
 
-The one-step estimator uses 5-fold cross-fitting on one sample of n, as an
-analyst would: for each fold, every nuisance is tuned and fit on the other
-four folds and predicts on the held-out one, and psi-hat = mean[m(mu-hat) +
-alpha-hat (Y - mu-hat)] averages the out-of-fold predictions over all n,
-with an influence-function SE and a 95% Wald interval. The alpha-hat RMSE
-above is the mean over the five fold fits. One XGBoost outcome regression
-per replicate and fold (the task "outcome") is shared by every alpha-hat, so
-a method's gap to the oracle, which plugs in alpha0, is the cost of
-estimating alpha alone. The true psi0 is exact for a binary treatment and a
-4M-draw Monte Carlo integral for the shift (dgp.true_psi).
+The one-step estimator uses sample splitting: every nuisance is tuned and
+fit on a training sample of n, and psi-hat = mean[m(mu-hat) + alpha-hat
+(Y - mu-hat)] is computed on an independent estimation sample of n, with an
+influence-function SE and a 95% Wald interval. One XGBoost outcome regression
+per replicate (the task "outcome") is shared by every alpha-hat, so a
+method's gap to the oracle, which plugs in alpha0, is the cost of estimating
+alpha alone. The true psi0 is exact for a binary treatment and a 4M-draw
+Monte Carlo integral otherwise (dgp.true_psi).
 
-Earlier results (results/pilot, results/pilot_cv5) fit on one sample of n
-and evaluated psi-hat on a second, independent sample of n. Their training
-sample is this design's sample, so the replicates still pair.
+This is the design of results/pilot_cv5, and its training and estimation
+samples are the same, so the replicates pair. results/pilot_cf5 used 5-fold
+cross-fitting on the training sample alone instead (psi-hat averaged over
+all n out-of-fold predictions, nuisances tuned inside each fold), at about
+4-5 times the cost; its record label is "crossfit5".
 
 Blocks (see dgp.py for the DGPs):
   ate        ATE at n = 1000, claims 1 and 2. Plug-ins (XGBoost and main-terms
@@ -65,11 +65,10 @@ For every alpha-hat the summary also reports, on the estimation sample:
     alpha-hat. Its bias is zero, so it shows each alpha-hat's variance cost
     alone.
 
-Tuning, the same for every learner: 5-fold cross-validation inside each
-cross-fitting fold's training part (nested, so the held-out fold never
-informs the tuning). Each setting is fit on four tuning folds and scored on
-the fifth, and the setting with the smallest mean held-out loss is refit on
-the whole training part.
+Tuning, the same for every learner: 5-fold cross-validation on the
+training sample. Each setting is fit on four folds and scored on the fifth,
+and the setting with the smallest mean held-out loss is refit on the whole
+training sample. The estimation sample plays no part in it.
 The loss is the squared Riesz loss for Riesz learners (`score`), log loss
 for the classifiers, and squared error for the outcome and exposure models.
 XGBoost early-stops on the held-out fold, and the refit uses the mean
@@ -77,10 +76,11 @@ stopping iteration. The earlier results (results/pilot) tuned on a single
 20% split, which picked noisy winners from large grids. The datasets are the
 same, so the two sets of results pair replicate by replicate.
 
-Each (block, dgp, n, rep, method) is one task, covering all five folds, and
-writes one JSON file, plus one .npz of its out-of-fold predictions on the
-sample, so a rerun fills only the gaps. Results go to $RIESZ_SIM_OUT/pilot_cf5
-(default: results/pilot_cf5).
+Each (block, dgp, n, rep, method) is one task and writes one JSON file,
+plus one .npz of its predictions on the estimation sample, so a rerun fills
+only the gaps. Results go to $RIESZ_SIM_OUT/final_split
+(default: results/final_split); set RIESZ_SIM_RUN=pilot_cf5 to summarize the
+cross-fitting pilot, or =pilot_cv5 for the earlier split pilot.
 
 Usage:
   python pilot.py run --blocks ate tsm shift --reps 0:20 --jobs 9
@@ -111,8 +111,9 @@ import dgp as D
 
 HERE = Path(__file__).resolve().parent
 # Set RIESZ_SIM_OUT to put results elsewhere, e.g. cluster scratch storage, and
-# RIESZ_SIM_RUN to summarize an earlier run (e.g. pilot_cv5).
-OUT = Path(os.environ.get("RIESZ_SIM_OUT", HERE / "results")) / os.environ.get("RIESZ_SIM_RUN", "pilot_cf5")
+# RIESZ_SIM_RUN to summarize an earlier run (pilot_cf5, pilot_cv5). The default
+# is the current design's run, so its results never mix with another design's.
+OUT = Path(os.environ.get("RIESZ_SIM_OUT", HERE / "results")) / os.environ.get("RIESZ_SIM_RUN", "final_split")
 BASE_SEED = 20261020
 SEED = 0
 N_TEST = 20_000
@@ -230,16 +231,22 @@ GRIDS["rieszboost_kl"] = GRIDS["rieszboost"]
 # ------------------------------------------------------------- data ---
 
 def sample_data(dgp_name, n, rep):
-    """The sample, its cross-fitting folds, and the tuning folds used inside
-    each fold's training part. The sample and the cross-fitting folds are
-    the training sample and tuning folds of results/pilot_cv5 (the 20% split
-    of results/pilot is still drawn, to keep the random stream in place)."""
+    """The training sample, its tuning folds, and a second set of folds that
+    only pilot_cf5's nested tuning used. The sample and the tuning folds are
+    those of results/pilot_cv5 (the 20% split of results/pilot is still
+    drawn, to keep the random stream in place)."""
     rng = np.random.default_rng([BASE_SEED, zlib.crc32(dgp_name.encode()), n, rep])
     d = D.DGPS[dgp_name].draw(n, rng)
     rng.random(n)
     cf = rng.permutation(np.arange(n) % K)
     inner = rng.permutation(np.arange(n) % K)
     return d, cf, inner
+
+
+def est_data(dgp_name, n, rep):
+    """The estimation sample: n fresh draws, independent of the training
+    sample, on which the one-step estimator is evaluated (as in pilot_cv5)."""
+    return D.DGPS[dgp_name].draw(n, np.random.default_rng([BASE_SEED, zlib.crc32(dgp_name.encode()), n, rep, 1]))
 
 
 def _tune(grid, fit_score):
@@ -345,14 +352,14 @@ RIESZ = {"rieszboost": _rieszboost("squared"), "rieszboost_kl": _rieszboost("kl"
          "forestriesz": _forestriesz}
 
 
-# A fit function takes (method, estimand, train, folds, covs) and returns
-# (predict, selected setting, CV score of every setting). predict(df)
-# maps each variant to alpha-hat at (A, X) for a shift, and to
-# (alpha-hat(1, x), alpha-hat(0, x)) for a binary treatment.
+# A fit function takes (method, estimand, train, folds, covs, tuned=None) and
+# returns (predict, selected setting, CV score of every setting, tuned). It
+# tunes over folds unless tuned, the last item of an earlier call's return,
+# is given; then it only fits. predict(df) maps each variant to alpha-hat at
+# (A, X) for a shift, and to (alpha-hat(1, x), alpha-hat(0, x)) for a binary
+# treatment.
 
-def fit_riesz(method, estimand, train, folds, covs, best=None, scores=None):
-    """With best given (a setting this task's CV already chose), skip the
-    tuning and only refit it on the whole sample."""
+def fit_riesz(method, estimand, train, folds, covs, tuned=None):
     cols = ["A"] + covs
     est = _estimand(estimand, covs)
 
@@ -360,8 +367,10 @@ def fit_riesz(method, estimand, train, folds, covs, best=None, scores=None):
         part = train[folds != k]
         m = RIESZ[method](est, covs, part, **s).fit(part[cols])
         return float(m.score(train[folds == k][cols])), None
-    if best is None:
+    if tuned is None:
         best, scores, _ = _tune(GRIDS[method], fit_score)
+    else:
+        best, scores = tuned, None
     m = RIESZ[method](est, covs, train, **best).fit(train[cols])
 
     def predict(df):
@@ -374,7 +383,7 @@ def fit_riesz(method, estimand, train, folds, covs, best=None, scores=None):
         for c in CLIPS:
             out[f"{method}_clip{str(c)[2:]}"] = _clip_alpha(estimand, alpha, c)
         return out
-    return predict, best, scores
+    return predict, best, scores, best
 
 
 CLIPS = (0.01, 0.05)
@@ -407,18 +416,24 @@ def _clip_alpha(estimand, alpha, c):
     return tuple(np.clip(v, -cap, cap) for v in alpha)
 
 
-def _xgb_tuned(make, X, y, folds, score):
+def _xgb_tuned(make, X, y, folds, score, tuned=None):
     """Tune an XGBoost model by K-fold CV, early-stopping on the held-out fold;
-    refit on everything with the mean stopping iteration of the best setting.
-    score(y_true, model, X_held) is higher-is-better."""
-    def fit_score(s, k):
-        f, h = folds != k, folds == k
-        m = make(n_estimators=2000, early_stopping_rounds=20, **s)
-        m.fit(X[f], y[f], eval_set=[(X[h], y[h])], verbose=False)
-        return score(y[h], m, X[h]), m.best_iteration + 1
-    best, scores, iters = _tune(GRIDS["xgb"], fit_score)
-    m = make(n_estimators=int(round(np.mean(iters))), **best).fit(X, y)
-    return m, best, scores
+    fit on everything with the mean stopping iteration of the best setting.
+    score(y_true, model, X_held) is higher-is-better. With tuned = (best,
+    n_trees) from an earlier call, skip the tuning and only fit. Returns the
+    model, the setting, every setting's CV score and tuned."""
+    if tuned is None:
+        def fit_score(s, k):
+            f, h = folds != k, folds == k
+            m = make(n_estimators=2000, early_stopping_rounds=20, **s)
+            m.fit(X[f], y[f], eval_set=[(X[h], y[h])], verbose=False)
+            return score(y[h], m, X[h]), m.best_iteration + 1
+        best, scores, iters = _tune(GRIDS["xgb"], fit_score)
+        tuned = (best, int(round(np.mean(iters))))
+    else:
+        scores = None
+    best, n_trees = tuned
+    return make(n_estimators=n_trees, **best).fit(X, y), best, scores, tuned
 
 
 def _neg_log_loss(y, m, X):
@@ -426,12 +441,12 @@ def _neg_log_loss(y, m, X):
     return -log_loss(y, m.predict_proba(X)[:, 1], labels=[0, 1])
 
 
-def _xgb_propensity(train, folds, covs):
+def _xgb_propensity(train, folds, covs, tuned=None):
     import xgboost as xgb
 
     def make(**kw):
         return xgb.XGBClassifier(n_jobs=1, random_state=SEED, **kw)
-    return _xgb_tuned(make, train[covs], train["A"], folds, _neg_log_loss)
+    return _xgb_tuned(make, train[covs], train["A"], folds, _neg_log_loss, tuned)
 
 
 def _plugin_alpha(estimand, pi):
@@ -443,9 +458,9 @@ def _plugin_alpha(estimand, pi):
     return 1 / pi, np.zeros_like(pi)
 
 
-def fit_plugin_binary(method, estimand, train, folds, covs):
+def fit_plugin_binary(method, estimand, train, folds, covs, tuned=None):
     if method == "plugin_xgb":
-        m, best, scores = _xgb_propensity(train, folds, covs)
+        m, best, scores, tuned = _xgb_propensity(train, folds, covs, tuned)
     else:
         from sklearn.linear_model import LogisticRegression
         m, best, scores = LogisticRegression(C=1e6, max_iter=2000).fit(train[covs], train["A"]), {}, []
@@ -456,10 +471,10 @@ def fit_plugin_binary(method, estimand, train, folds, covs):
         for c in CLIPS:
             out[f"{method}_clip{str(c)[2:]}"] = _plugin_alpha(estimand, np.clip(pi, c, 1 - c))
         return out
-    return predict, best, scores
+    return predict, best, scores, tuned
 
 
-def fit_plugin_classif(method, estimand, train, folds, covs):
+def fit_plugin_classif(method, estimand, train, folds, covs, tuned=None):
     """Density ratio by classification, as in ../lee_schuler_10cov_shift: an
     XGBoost classifier of observed rows (A, X), labelled 1, against shifted rows
     (A + delta, X), labelled 0. The classes are balanced, so the odds
@@ -476,7 +491,8 @@ def fit_plugin_classif(method, estimand, train, folds, covs):
 
     def make(**kw):
         return xgb.XGBClassifier(n_jobs=1, random_state=SEED, **kw)
-    m, best, scores = _xgb_tuned(make, X, y, np.r_[folds, folds], _neg_log_loss)
+    m, best, scores, tuned = _xgb_tuned(make, X, y, None if folds is None else np.r_[folds, folds],
+                                        _neg_log_loss, tuned)
 
     def predict(df):
         p = m.predict_proba(df[cols])[:, 1]
@@ -489,10 +505,10 @@ def fit_plugin_classif(method, estimand, train, folds, covs):
             q = np.clip(p, c, 1 - c)
             out[f"{method}_clip{str(c)[2:]}"] = alpha((1 - q) / q)
         return out
-    return predict, best, scores
+    return predict, best, scores, tuned
 
 
-def fit_outcome(estimand, train, folds, covs):
+def fit_outcome(estimand, train, folds, covs, tuned=None):
     """The outcome regression mu-hat(a, x), shared by every alpha-hat in a
     replicate: XGBoost on (A, X), tuned by held-out squared error. Returns
     predict(df) -> (mu-hat(A, X), m(mu-hat)(X)), the second being
@@ -507,7 +523,7 @@ def fit_outcome(estimand, train, folds, covs):
 
     def neg_mse(y, m, X):
         return -float(np.mean((np.asarray(y) - m.predict(X)) ** 2))
-    m, best, scores = _xgb_tuned(make, train[cols], train["Y"], folds, neg_mse)
+    m, best, scores, tuned = _xgb_tuned(make, train[cols], train["Y"], folds, neg_mse, tuned)
 
     def predict(df):
         Z = df[cols]
@@ -521,7 +537,7 @@ def fit_outcome(estimand, train, folds, covs):
         if estimand == "LOCALSHIFT":
             return mu, (Z["A"].to_numpy() < D.THRESHOLD) * (m.predict(Z.assign(A=Z["A"] + D.DELTA)) - mu)
         return mu, m.predict(Z.assign(A=Z["A"] + D.DELTA)) - mu
-    return predict, best, scores
+    return predict, best, scores, tuned
 
 
 # ------------------------------------------------------------- tasks ---
@@ -547,26 +563,20 @@ def _mkdir(path):
     return path
 
 
-def _outcome_task(estimand, dgp_name, d, cf, inner, covs):
-    """Cross-fit mu-hat; store on the sample what the one-step estimator and
-    the oracle need: out-of-fold mu-hat and m(mu-hat), and the truth. Returns
-    (record fields, arrays)."""
+def _outcome_task(estimand, dgp_name, train, folds, est, covs):
+    """Tune and fit mu-hat on the training sample; store on the estimation
+    sample what the one-step estimator and the oracle need: mu-hat, m(mu-hat)
+    and the truth. Returns (record fields, arrays)."""
     g = D.DGPS[dgp_name]
-    n = len(d)
-    mu, m_mu, bests, scores = np.empty(n), np.empty(n), [], []
-    for k in range(K):
-        tr = cf != k
-        predict, best, s = fit_outcome(estimand, d[tr], inner[tr], covs)
-        mu[~tr], m_mu[~tr] = predict(d[~tr])
-        bests.append(best)
-        scores.append(s)
-    X, a = d[covs].to_numpy(), d["A"].to_numpy()
+    predict, best, scores, tuned = fit_outcome(estimand, train, folds, covs)
+    mu, m_mu = predict(est)
+    X, a = est[covs].to_numpy(), est["A"].to_numpy()
     mu0, m0 = D._mu(a, X), D.m_mu0(estimand, a, X)
-    arrays = {"y": d["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
+    arrays = {"y": est["Y"].to_numpy(), "mu": mu, "m_mu": m_mu, "alpha0": g.true_alpha(estimand, a, X),
               "mu0": mu0, "m_mu0": m0, "w": D.denominator(estimand, a)}
     fields = {"rows": [], "rmse_mu": float(np.sqrt(np.mean((mu - mu0) ** 2))),
-              "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": bests, "grid": GRIDS["xgb"],
-              "scores": scores}
+              "rmse_m_mu": float(np.sqrt(np.mean((m_mu - m0) ** 2))), "best": best, "n_trees": tuned[1],
+              "grid": GRIDS["xgb"], "scores": scores}
     return fields, arrays
 
 
@@ -598,40 +608,35 @@ def run_task(block, dgp_name, n, rep, method, refit=False):
     t0 = time.time()
     old = json.loads(path.read_text()) if refit else None
     try:
-        d, cf, inner = sample_data(dgp_name, n, rep)
+        train, folds, _ = sample_data(dgp_name, n, rep)
+        est = est_data(dgp_name, n, rep)
         covs = D.DGPS[dgp_name].covariates
         if method == "outcome":
-            fields, arrays = _outcome_task(estimand, dgp_name, d, cf, inner, covs)
+            fields, arrays = _outcome_task(estimand, dgp_name, train, folds, est, covs)
             np.savez(_mkdir(path).with_suffix(".npz"), **arrays)
             rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method, **fields,
-                   "design": "crossfit5", "seconds": time.time() - t0}
+                   "design": "split", "seconds": time.time() - t0}
             path.write_text(json.dumps(rec))
             return path, False, rec["seconds"]
         test, alpha0, weak, pi = test_data(dgp_name, estimand)
         fit = (fit_riesz if method in RIESZ else
                fit_plugin_classif if method == "plugin_classif" else fit_plugin_binary)
-        a_obs = d["A"].to_numpy()
-        on_est, fold_rows, best, scores = {}, [], [], []
-        for k in range(K):
-            tr = cf != k
-            predict, b, s = (fit_riesz(method, estimand, d[tr], inner[tr], covs, old["best"][k], old["scores"][k])
-                             if old else fit(method, estimand, d[tr], inner[tr], covs))
-            best.append(b)
-            scores.append(s)
-            # Out-of-fold alpha-hat at the observed (A, X), for the one-step estimator.
-            for v, a in predict(d[~tr]).items():
-                on_est.setdefault(v, np.empty(n))[~tr] = (a if estimand in CONTINUOUS
-                                                         else a_obs[~tr] * a[0] + (1 - a_obs[~tr]) * a[1])
-            fold_rows.append(_alpha_rows(predict(test), dgp_name, estimand, test, covs, alpha0, weak, pi))
+        # A refit (--refit) reuses the setting a finished task chose.
+        predict, best, scores, tuned = fit(method, estimand, train, folds, covs, old["best"] if old else None)
+        if old:
+            scores = old["scores"]
+        # alpha-hat at the observed (A, X) of the estimation sample, for the one-step estimator.
+        a_est = est["A"].to_numpy()
+        on_est = {v: (a if estimand in CONTINUOUS else a_est * a[0] + (1 - a_est) * a[1])
+                  for v, a in predict(est).items()}
         np.savez(_mkdir(path).with_suffix(".npz"), **on_est)
-        # alpha-hat's test-set error: the mean over the five fold fits.
-        rows = [{"variant": v, "rmse": float(np.mean([f[v]["rmse"] for f in fold_rows])),
-                 "rmse_weak": (float(np.mean([f[v]["rmse_weak"] for f in fold_rows])) if weak.any() else None),
-                 "max_abs_alpha_hat": float(max(f[v]["max_abs_alpha_hat"] for f in fold_rows))}
-                for v in fold_rows[0]]
+        rows = [{"variant": v, **r} for v, r in
+                _alpha_rows(predict(test), dgp_name, estimand, test, covs, alpha0, weak, pi).items()]
         rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method, "rows": rows,
                "best": best, "grid": GRIDS["xgb"] if method.startswith("plugin_") else GRIDS[method],
                "scores": scores, "seconds": time.time() - t0}
+        if not old and isinstance(tuned, tuple):  # an XGBoost plug-in: (setting, number of trees)
+            rec["n_trees"] = tuned[1]
         if old:
             rec.update(grid=old["grid"], seconds=old["seconds"], refit_seconds=time.time() - t0,
                        refit_of={r["variant"]: r["rmse"] for r in old["rows"]})
