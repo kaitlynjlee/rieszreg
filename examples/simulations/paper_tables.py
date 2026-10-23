@@ -3,8 +3,10 @@ summarized run (its rows.csv and psi.csv, written by `pilot.py summarize`).
 
     python paper_tables.py OUT_DIR FIGURE_PDF [RUN]
 
-RUN is a folder under results/ (default pilot_cf5, the run in the paper as of
-2026-10-22; final_split for the final run). Run from examples/simulations,
+RUN is a folder under results/ (default final_split, the final run; pilot_cf5
+for the 50-replicate pilot). The main-text tables use the eight core ATE and
+ATT DGPs (CORE); tab_appendix.tex and tab_appendix_alpha.tex hold the five
+others (APPENDIX), which have 200 replicates in the final run. Run from examples/simulations,
 with a Python that has matplotlib (the project venv does not; Anaconda's does).
 The prose numbers in the paper are not regenerated: check them by hand."""
 import sys
@@ -21,16 +23,18 @@ import dgp as D  # noqa: E402
 
 OUT = Path(sys.argv[1])
 FIG = Path(sys.argv[2])
-RUN = Path("results") / (sys.argv[3] if len(sys.argv) > 3 else "pilot_cf5")
+RUN = Path("results") / (sys.argv[3] if len(sys.argv) > 3 else "final_split")
 p = pd.read_csv(RUN / "psi.csv")
 r = pd.read_csv(RUN / "rows.csv")
 
-ATE = ["overlap_g05", "overlap_g1", "overlap_g2", "overlap_g3", "tail_feature", "bulk_feature", "logistic",
-       "smooth", "step", "sparse50", "additive", "interaction", "steps10"]
+CORE = ["overlap_g05", "overlap_g1", "overlap_g2", "overlap_g3", "logistic", "sparse50", "interaction", "steps10"]
+APPENDIX = ["tail_feature", "bulk_feature", "smooth", "step", "additive"]
+ATE = CORE + APPENDIX
 SHIFT = ["shift_gauss", "shift_hetero", "shift_skew", "shift_bimodal"]
-NOT_WEAK = [g for g in ATE if g != "overlap_g3"]
+NOT_WEAK = [g for g in CORE if g != "overlap_g3"]
 REF = {"ate": "plugin_xgb_clip01", "att": "plugin_xgb_clip05", "shift": "plugin_classif", "localshift": "plugin_classif"}
-RN = {"ate": "riesznet_clip01", "att": "riesznet_clip05", "shift": "riesznet_clip01", "localshift": "riesznet_clip01"}
+RN = {"ate": "riesznet_clip01", "att": "riesznet_clip05", "shift": "riesznet_clip01", "localshift": "riesznet_clip01",
+      "tsm": "riesznet_clip01"}
 LEARNERS = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "forestriesz"]
 NAME = {"rieszboost": "rieszboost", "riesznet": "riesznet (capped)", "krrr": "krrr", "riesztree": "riesztree",
         "augforestriesz": "augforestriesz", "forestriesz": "forestriesz", "oracle": "oracle",
@@ -82,7 +86,7 @@ for g in ["additive", "additive_g2", "interaction"]:
     for n in [250, 1000, 4000]:
         c = s[(s.dgp == g) & (s.n == n)]
         cells = []
-        for v in ["oracle", "plugin_xgb_clip01", "rieszboost", "rieszboost_kl"]:
+        for v in ["oracle", "plugin_xgb_clip01", "rieszboost", "rieszboost_kl", RN["tsm"], "krrr", "forestriesz"]:
             x = c[c.variant == v]
             cells.append(f"{np.sqrt(x.sqerr.mean()) * np.sqrt(n):.2f} ({x.cover.mean():.2f})")
         lines.append((rf"\texttt{{{g.replace('_', chr(92) + '_')}}}" if n == 250 else "") + f" & {n} & " + " & ".join(cells) + r" \\")
@@ -112,8 +116,8 @@ def learner_rows(blk, dgps, ms):
     return out
 
 
-lines = [r"\multicolumn{7}{l}{\emph{ATE}} \\"] + learner_rows("ate", ATE, LEARNERS)
-lines += [r"\addlinespace", r"\multicolumn{7}{l}{\emph{ATT}} \\"] + learner_rows("att", ATE, LEARNERS)
+lines = [r"\multicolumn{7}{l}{\emph{ATE}} \\"] + learner_rows("ate", CORE, LEARNERS)
+lines += [r"\addlinespace", r"\multicolumn{7}{l}{\emph{ATT}} \\"] + learner_rows("att", CORE, LEARNERS)
 lines += [r"\addlinespace", r"\multicolumn{7}{l}{\emph{Additive shift}} \\"] + learner_rows("shift", SHIFT, ["rieszboost", "riesznet", "krrr"])
 lines += [r"\addlinespace", r"\multicolumn{7}{l}{\emph{LASE}} \\"] + learner_rows("localshift", SHIFT, ["rieszboost", "riesznet", "krrr"])
 (OUT / "tab_learners.tex").write_text("\n".join(lines) + "\n")
@@ -136,13 +140,43 @@ def decomp(blk, dgps, ms):
 
 
 lines = []
-for label, blk, dgps, ms in [("ATE (12 DGPs)", "ate", NOT_WEAK, LEARNERS), ("ATT (12 DGPs)", "att", NOT_WEAK, LEARNERS),
+for label, blk, dgps, ms in [(f"ATE ({len(NOT_WEAK)} DGPs)", "ate", NOT_WEAK, LEARNERS),
+                             (f"ATT ({len(NOT_WEAK)} DGPs)", "att", NOT_WEAK, LEARNERS),
                              ("Additive shift (4)", "shift", SHIFT, ["rieszboost", "riesznet", "krrr"]),
                              ("LASE (4)", "localshift", SHIFT, ["rieszboost", "riesznet", "krrr"])]:
     t = decomp(blk, dgps, ms)
     lines.append(f"{label} & {rng(t.shared)} & {rng(t.alpha_part)} & {rng(t.ratio)} & "
                  f"{rng(t.a_spread)} & {rng(t.p_spread)} \\\\")
 (OUT / "tab_decomp.tex").write_text("\n".join(lines) + "\n")
+
+# ---- Appendix: the five other ATE and ATT DGPs, 200 replicates ------------
+# Per method and DGP: coverage, and RMSE as a ratio to the reference plug-in's,
+# bold where the method is resolved worse than the reference (z >= 3).
+def appendix_cells(blk, m):
+    s = p[(p.block == blk) & p.dgp.isin(APPENDIX)]
+    v = variant(blk, m)
+    w = s.pivot_table(index=["dgp", "rep"], columns="variant", values="sqerr")
+    cells = []
+    for g in APPENDIX:
+        cov = s[(s.dgp == g) & (s.variant == v)].cover.mean()
+        if v == REF[blk]:
+            cells += [f"{cov:.2f}", "1"]
+            continue
+        ratio = f"{np.sqrt(w.loc[g][v].mean() / w.loc[g][REF[blk]].mean()):.2f}"
+        cells += [f"{cov:.2f}", rf"\textbf{{{ratio}}}" if zpair(w.loc[g], v, REF[blk]) >= 3 else ratio]
+    return cells
+
+
+lines = []
+for blk, label in [("ate", "ATE"), ("att", "ATT")]:
+    lines.append(rf"\multicolumn{{11}}{{l}}{{\emph{{{label}}}}} \\")
+    for m in ["oracle", "ref", "plugin_logit"] + LEARNERS:
+        lines.append(NAME[m] + " & " + " & ".join(appendix_cells(blk, m)) + r" \\")
+    lines.append(r"\addlinespace")
+(OUT / "tab_appendix.tex").write_text("\n".join(lines[:-1]) + "\n")
+lines = [r"\multicolumn{7}{l}{\emph{ATE}} \\"] + learner_rows("ate", APPENDIX, LEARNERS)
+lines += [r"\addlinespace", r"\multicolumn{7}{l}{\emph{ATT}} \\"] + learner_rows("att", APPENDIX, LEARNERS)
+(OUT / "tab_appendix_alpha.tex").write_text("\n".join(lines) + "\n")
 
 # ---- Table: claim 3, KL vs squared ------------------------------------
 lines = []
