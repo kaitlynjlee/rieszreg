@@ -28,7 +28,8 @@ Blocks (see dgp.py for the DGPs):
              logistic regression, each unclipped and clipped at 0.01 and 0.05)
              and five Riesz learners.
   tsm        TSM at A = 1, n in {250, 1000, 4000}, claim 3. rieszboost with the
-             squared and the KL loss, and the XGBoost plug-in.
+             squared and the KL loss, and the XGBoost plug-in; riesznet, krrr
+             and forestriesz (squared loss) for the rate across learners.
   tsm_align  TSM at A = 1, n = 1000, on the weak-overlap alignment ladder: claim 3
              where psi-hat depends on alpha-hat.
   shift      Additive shift by 0.5, n = 1000, claim 1. The classification density
@@ -130,7 +131,7 @@ BLOCKS = {
     "tsm": dict(
         estimand="TSM", ns=[250, 1000, 4000],
         dgps=["additive", "additive_g2", "interaction"],
-        methods=["plugin_xgb", "rieszboost", "rieszboost_kl"]),
+        methods=["plugin_xgb", "rieszboost", "rieszboost_kl", "riesznet", "krrr", "forestriesz"]),
     "tsm_align": dict(
         estimand="TSM", ns=[1000],
         dgps=["hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
@@ -201,12 +202,25 @@ def _grid(**axes):
 #     100 trees, bootstrap and every feature at each split (max_features =
 #     1.0), its defaults, are fixed. ForestRiesz keeps its grid: it picked
 #     1 (a hard limit) in 15% and 100 in 5%.
+# Fourth move, for the final run, after pilot_cf5 (share of fits at each edge,
+# by block; an edge counts at 15% or more):
+#   * rieszboost: L2 penalty 10^4, the top, in 19% (shift), 9-11% elsewhere.
+#     -> {0, 10, ..., 10^5}; 0 is a hard limit. The grid grows from 25 to 30
+#     settings: depth 1 is a hard limit and is chosen in 26% (ATE), and
+#     depth 8 can't go (depth 5, below it, in 43% for the TSM).
+#   * riesznet: learning rate 1e-4, the bottom, in 19-20% (ATE, ATT); 3e-2, the
+#     top, in 25% (LASE). -> {3e-5, ..., 1e-1}, both ends.
+#   * riesztree: 3 leaves, the bottom, in 17% and minimum leaf 5, the bottom,
+#     in 16% (ATT). Leaves -> {2, ..., 24} (2 is a hard limit; 32 was chosen
+#     in at most 2%); minimum leaf -> {2, 5, ..., 200}.
+#   * XGBoost's learning rate 1, the top, in 21-22% (propensity, ATT and TSM)
+#     is exempt: XGBoost caps it at 1. Depth 1 is a hard limit too.
 GRIDS = {
     "xgb": _grid(max_depth=[1, 2, 3, 5, 8], learning_rate=[0.03, 0.1, 0.3, 1.0]),
-    "rieszboost": _grid(max_depth=[1, 2, 3, 5, 8], reg_lambda=[0.0, 10.0, 100.0, 1000.0, 10000.0]),
-    "riesznet": _grid(learning_rate=[1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]),
+    "rieszboost": _grid(max_depth=[1, 2, 3, 5, 8], reg_lambda=[0.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]),
+    "riesznet": _grid(learning_rate=[3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]),
     "krrr": _grid(length_scale_mult=[0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]),
-    "riesztree": _grid(max_leaf_nodes=[3, 4, 6, 8, 12, 16, 24, 32], min_samples_leaf=[5, 20, 50, 100, 200]),
+    "riesztree": _grid(max_leaf_nodes=[2, 3, 4, 6, 8, 12, 16, 24], min_samples_leaf=[2, 5, 20, 50, 100, 200]),
     "augforestriesz": _grid(min_samples_leaf=[5, 10, 20, 50, 100, 200]),
     "forestriesz": _grid(min_samples_leaf=[1, 2, 5, 10, 20, 50, 100]),
 }
@@ -724,6 +738,7 @@ CONTRASTS = list(dict.fromkeys(
        for m in ms for c in ("01", "05") for ref in (m, f"plugin_xgb_clip{c}")]
     + [("shift", f"{m}_clip{c}", ref) for m in ("rieszboost", "riesznet", "krrr") for c in ("01", "05")
        for ref in (m, f"plugin_classif_clip{c}")]
+    + [("tsm", headline(m), "plugin_xgb_clip01") for m in ("riesznet", "krrr", "forestriesz")]
     + [(b, a, ref) for b in ("tsm", "tsm_align")
        for a, ref in [("rieszboost_kl", "rieszboost"), ("rieszboost_kl", "plugin_xgb_clip01"),
                       ("rieszboost", "plugin_xgb_clip01")]]
