@@ -700,13 +700,18 @@ def paired(df, a, b, col="rmse"):
 RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "forestriesz"]
 
 
-def headline(m):
+def headline(m, block=None):
     """The variant a learner is reported by. riesznet's |alpha-hat| is capped
     at 1/0.01, the bound of the reference plug-in (clipped at 0.01): uncapped,
     the few replicates where it drifts dominate every mean (AIMS.md section 6).
-    The other Riesz learners barely change under that cap, so they are
-    reported as fitted."""
-    return f"{m}_clip01" if m == "riesznet" else m
+    For the ATT the cap is 1/0.05 (19), against the plug-in clipped at 0.05:
+    there alpha-hat(0, x) drifts where controls are scarce (pi near 1), only
+    treated rows push it and only control rows hold it back, and the cap at
+    1/0.01 left 1-2 blow-ups per DGP (pilot_cf5, 2026-10-22). The other Riesz
+    learners barely change under the cap, so they are reported as fitted."""
+    if m != "riesznet":
+        return m
+    return "riesznet_clip05" if block == "att" else "riesznet_clip01"
 
 
 CONTRASTS = list(dict.fromkeys(
@@ -725,8 +730,8 @@ CONTRASTS = list(dict.fromkeys(
     + [("shift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
     # The ratio estimands, against the same references as the ATE and the shift.
-    + [("att", headline(m), "plugin_xgb_clip01") for m in RIESZ_ATE]
-    + [("att", "plugin_logit", "plugin_xgb_clip01")]
+    + [("att", headline(m, "att"), "plugin_xgb_clip05") for m in RIESZ_ATE]
+    + [("att", "plugin_logit", "plugin_xgb_clip05")]
     + [("localshift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
 ))
@@ -948,7 +953,7 @@ def cmd_summarize(args):
             # B is shared within a replicate, so across methods a larger s should
             # mean a larger remainder when B > 0 and a smaller one when B < 0.
             v = r.index.get_level_values("variant")
-            est = r[v.isin([headline(m) for m in RIESZ]) | (v.str.startswith("plugin_") & v.str.endswith("_clip01"))]
+            est = r[v.isin([headline(m, block) for m in RIESZ]) | (v.str.startswith("plugin_") & v.str.endswith("_clip01"))]
             print("\n-- across methods (Riesz learners, plug-ins clipped at 0.01), correlation of s with the remainder")
             print(est.groupby(level=["dgp", "n"]).apply(
                 lambda c: np.corrcoef(c["shrinkage s"], c["remainder (bias given the fits)"])[0, 1])

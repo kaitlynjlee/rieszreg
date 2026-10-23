@@ -25,40 +25,308 @@ What should a reader believe after these simulations that they did not before?
 Aim for the shape *[method] works [well] when [condition] and not when [other
 condition]*. A claim without the "and not when" half is usually overstated.
 
+**Rescoped (2026-10-22), then widened the same day.** This paper shows that
+the package works and justifies its parts: why it has several learners,
+several losses and several estimands. Where and why each method is strong
+or weak, including the alignment results, stays in a later paper
+(section 8).
+
 | # | Claim | Who cares, and what would they do differently |
 |---|-------------------------------------------------------|------------------------------------------------------|
-| 1 | Riesz regression does not work worse than plug-in for most scenarios, and maybe works better than plug-in in settings with practical positivity violations | Researchers who want a package to use for empirical work|
-| 2 | There are different DGPs where some learners work better than others for Riesz regression | |
-| 3 | There are different DGPs for which different losses work better than others (maybe low n?) | |
+| 1 | **The package works.** For the average treatment effect (ATE), the average treatment effect on the treated (ATT), the treatment-specific mean (TSM), the additive shift effect and the local additive shift effect (LASE), the package's Riesz learners (rieszboost, riesznet, krrr, riesztree and the forests) give one-step estimates whose 95% intervals cover close to 95%, whose root mean squared error (RMSE) is comparable to a well-tuned plug-in, and whose error shrinks at the √n rate as n grows. Coverage and accuracy degrade as overlap weakens. | Researchers who want a package for empirical work. They can use it for these estimands without first checking it against a plug-in, and they know weak overlap is where to be careful. |
+| 2 | **Several learners earn their place.** No Riesz learner has the most accurate representer in every data-generating process (DGP): krrr wins with good overlap, forestriesz with weak overlap or many covariates, and rieszboost on the LASE. The choice reaches ψ̂ mainly where the representer is hard to estimate (weak overlap, continuous exposures); in ordinary binary-treatment DGPs its value for ψ̂ is avoiding a poor learner. | Users choosing a learner: which one to try first, and when the choice matters for the final estimate. |
+| 3 | **A second loss earns its place.** For a TSM, the KL loss gives a more accurate representer than the squared loss when the propensity logit is additive, and its lead grows with n. The two tie at n = 250 and when the logit has interactions, and the gain does not reach ψ̂ at these sample sizes. | Users who need positive weights or who use the representer itself (for example as weights), and anyone choosing a loss. |
+| 4 | **The estimands are useful.** One interface fits five estimands, including two ratio estimands (the ATT and the LASE), and each gives a working one-step estimator. | Users whose question is not the ATE. |
+
+The "and not when" halves: weak overlap for claim 1; ψ̂ in ordinary
+binary-treatment DGPs for claim 2; small n, interactions and ψ̂ for claim 3.
+
+**What moved to the later paper (section 8), and what came back:**
+- old claims 2 and 3, as questions of *when and why* a learner or a loss
+  wins. Claims 2 and 3 above keep only their existence form: each learner
+  or loss wins somewhere;
+- everything about the propensity and the outcome sharing hard structure:
+  the hard-representer DGPs, whose propensity is as hard to fit as the
+  outcome, and the alignment ladder, which varies how much of that hard
+  structure the two share.
+
+Old claim 1 was "Riesz regression is not worse than plug-in, and may be
+better under practical positivity violations". Its "not worse" half is now
+the RMSE part of claim 1. Its "better" half rested on the alignment ladder,
+so it moved too.
 
 ## 2. Sharpened goals
 
-One per claim. Pin down every word that could mean more than one thing, until
-two people reading the goal would agree on whether a given table meets it.
+Pin down every word that could mean more than one thing, until two people
+reading the goal would agree on whether a given table meets it.
 
-- **Better / works by what measure?** (bias, RMSE, coverage, RMSE of α̂ vs α₀, runtime, ...)
-- **At what sample sizes?**
-- **Under which DGPs, and which factor is varied?** (overlap, dimension, smoothness, sparsity, estimand, ...)
-- **Compared with what?** (oracle α₀, semi-oracle, propensity plug-in, other Riesz learners, ...)
-- **With which learners and tuning?**
+Notation for this section and the next: X is the covariates and A the
+treatment, binary for the ATE, ATT and TSM and a continuous exposure for the
+shifts, with lowercase a and x their values. μ₀(a, x) = E[Y | A = a, X = x]
+is the true outcome regression and μ̂ its fit; π(x) = P(A = 1 | X = x) is
+the propensity score; ψ̂ is the one-step estimate; α̂ is the fitted Riesz
+representer and α₀ the true one; γ is the factor that scales the
+propensity logit on the overlap ladder (larger γ, weaker overlap); and
+1(·) is the indicator. For the shifts, δ = 0.5 is the shift, t = 0 the
+LASE's threshold (only units with A < t are shifted), p(a | x) the
+conditional density of A given X, and r(a, x) = p(a − δ | x) / p(a | x)
+the density ratio. Good overlap means γ ≤ 1, moderate γ = 2 and weak
+γ = 3; the "ordinary" ATE DGPs are the ATE DGPs other than the alignment
+ones of section 8. Two
+different SEs appear: the SE of ψ̂ that the interval uses, and the Monte
+Carlo SE of a summary over replicates, which says how precisely the
+simulation pins that summary down. A contrast between two methods is
+*resolved* when its paired z (the mean per-replicate difference over its
+Monte Carlo SE) has |z| ≥ 3.
+Section 6 has the full notation.
 
-**Goal A.**
+**Claim 1, the package works.**
+- **By what measure?** Four parts, each judged at the final number of
+  replicates:
+  1. **Coverage.** The 95% one-step interval covers within about 2 Monte
+     Carlo SEs of 0.95 in every DGP with good or moderate overlap.
+  2. **Accuracy.** The RMSE of the one-step estimate ψ̂ is at most 1.25
+     times the reference plug-in's, judged by a paired contrast. The 1.25 is
+     a proposal, still to confirm.
+  3. **Rate.** In the TSM block, RMSE × √n is flat or falling from n = 250
+     to 4000, and coverage stays near 0.95.
+  4. **Boundary.** Coverage and RMSE are reported along the overlap ladder,
+     γ ∈ {0.5, 1, 2, 3}, so the reader sees where the degradation starts.
 
-**Goal B.**
+**Claim 2, several learners.**
+- **By what measure?** The RMSE of the fitted representer α̂ against the
+  true α₀ on a fixed test set, by DGP. A learner earns its place if it is resolved better than every other
+  Riesz learner in at least one DGP. For the one-step estimate ψ̂: the spread of its RMSE
+  across learners, and the share of its mean squared error that comes from
+  α̂
+  (the method-specific part of the error, beyond the oracle's).
+- **Over which learners?** All of them, in the ATE, ATT, shift and LASE
+  blocks.
 
-**Goal C.**
+**Claim 3, a second loss.**
+- **By what measure?** α̂'s RMSE, KL against squared, paired, for
+  rieszboost on the TSM at n = 250, 1000 and 4000; ψ̂'s RMSE second; the
+  share of treated units whose α̂ is not positive (KL's is positive by
+  construction).
+
+**Claim 4, the estimands.** The same measures as claim 1, for each of the
+five estimands.
+
+**Shared settings.**
+- **Sample sizes.** The ATE, ATT, shift and LASE at n = 1000; the TSM at
+  n = 250, 1000 and 4000, which carries the rate. n is the total sample.
+  With 5-fold cross-fitting, each nuisance is fit on 4n/5.
+- **DGPs.** All are in `dgp.py`.
+  - **ATE, 13 DGPs:**
+    - the overlap ladder, `overlap_g05` to `overlap_g3`, for the boundary;
+    - `tail_feature` and `bulk_feature`, a sharp propensity feature where
+      the true representer α₀ is large and where it is near 2;
+    - `logistic`, where the logistic plug-in is correctly specified;
+    - `smooth`, `step`, `additive` and `interaction`, different propensity
+      shapes;
+    - `sparse50`, with 50 covariates;
+    - `steps10`, built for rieszboost: 20 covariates, a logit that adds ten
+      centred steps, overlap matched to `overlap_g1`.
+  - **ATT:** the same 13 DGPs.
+  - **TSM:** `additive`, `additive_g2` and `interaction`.
+  - **Shift and LASE:** `shift_gauss`, `shift_hetero`, `shift_skew` and
+    `shift_bimodal`.
+  - **Moved to section 8:** `hard_shared_1`, `hard_shared_2`,
+    `hard_unshared_1`, `hard_unshared_2`, `mix33_1`, `mix33_2`, `mix67_1`,
+    `mix67_2`, and the whole `tsm_align` block (the TSM on the alignment
+    ladder).
+- **Ratio estimands.** The package fits the representer of the ATT's and
+  the LASE's numerator, E[A (μ₀(1, X) − μ₀(0, X))] and E[1(A < t)
+  (μ₀(A + δ, X) − μ₀(A, X))]. The one-step estimate divides by the mean of A or of
+  1(A < t), with the matching influence function (`pilot.py`, `load_psi`).
+- **Compared with what?**
+  - The oracle: the one-step estimator with the true α₀ and the same fitted
+    outcome regression μ̂.
+  - The reference plug-in: the XGBoost propensity clipped to [0.01, 0.99]
+    for the ATE; clipped to [0.05, 0.95] for the ATT (see the cap below).
+    Also reported: the other clipping levels and the main-terms logistic
+    plug-in.
+  - For the shift and the LASE: the classification plug-in, which
+    estimates the density ratio r by a classifier, unclipped and clipped.
+    For the LASE it applies the indicators exactly: with r̂ its estimate of
+    r, α̂ = 1(a < t + δ) r̂ − 1(a < t).
+- **Learners and tuning.**
+  - **ATE and ATT:** rieszboost, riesznet, krrr (kernel ridge Riesz
+    regression), riesztree, augforestriesz and forestriesz.
+  - **TSM:** rieszboost with the squared loss and with the KL
+    (Kullback–Leibler) loss.
+  - **Shift and LASE:** rieszboost, riesznet and krrr. forestriesz handles
+    binary treatments only.
+  - **Tuning:** every learner is tuned by 5-fold cross-validation (CV)
+    inside each cross-fitting fold, over the grids in `pilot.py`'s `GRIDS`.
+    The outcome regression is XGBoost tuned on squared error, shared by
+    every method in a replicate.
+  - **The cap on |α̂|.** Every Riesz learner also has capped variants: the
+    size of its fitted weights |α̂| capped at the largest weight a plug-in
+    whose propensity is clipped to [c, 1 − c] can reach (1/c for the ATE and
+    TSM, (1 − c)/c for the ATT and the LASE, (1 − c)/c − 1 for the shift),
+    at clipping levels c = 0.01 and 0.05. Only the predictions are capped;
+    the fit and its tuning are not. riesznet is reported capped: at c = 0.01
+    (|α̂| ≤ 100), and for the ATT at c = 0.05 (|α̂| ≤ 19), against the plug-in
+    clipped at 0.05 (see gap 1). The other learners are reported as fitted.
 
 ## 3. Tables and figures
 
-Sketch each display with empty cells and write its caption, including which
-claim it serves. Methods go in adjacent rows or columns, since that is the
-comparison the reader makes.
+Methods go in adjacent rows, since that is the comparison the reader makes.
 
-- **Table / Figure 1.** Serves claim __.
-- **Table / Figure 2.** Serves claim __.
+- **Table 1 (ATE, n = 1000).** Serves claim 1, parts 1 and 2.
+  - Rows: the oracle, the reference plug-in, the other plug-ins, then the
+    Riesz learners.
+  - Columns: the 13 DGPs, the overlap ladder first.
+  - Two panels: coverage, and the RMSE of the one-step estimate as a ratio
+    to the reference plug-in's, each with its Monte Carlo SE.
+- **Figure 1 (ATE overlap ladder).** Serves claim 1, part 4. The logit scale
+  γ on the x-axis; coverage on top, with a dashed line at 0.95, and the RMSE
+  of the one-step estimate below; one line per method.
+- **Table 2 (TSM, n = 250, 1000, 4000).** Serves claim 1, part 3. Rows:
+  methods. Columns: DGP × n. Cells: coverage, RMSE × √n, and the bias
+  divided by the empirical SE (the standard deviation of ψ̂ over
+  replicates). A flat RMSE × √n is the √n rate.
+- **Table 3 (the other estimands).** Serves claims 1 and 4. As Table 1, in
+  three panels: the ATT (13 DGPs), the additive shift and the LASE (4 DGPs
+  each), each against its plug-in.
+- **Table 4 (which learner has the best α̂).** Serves claim 2. Rows: DGPs,
+  grouped by block. Columns: the Riesz learners. Cells: α̂'s RMSE as a ratio
+  to the best learner in that row, with the winner marked where it is
+  resolved.
+- **Figure 2 (why learner differences shrink in ψ̂).** Serves claim 2. For
+  each DGP, the share of ψ̂'s mean squared error that comes from α̂, against
+  the spread of ψ̂'s RMSE across learners.
+- **Table 5 (KL vs squared).** Serves claim 3. Rows: DGP × n. Columns: α̂'s
+  RMSE for each loss and the paired z; ψ̂'s RMSE for each loss; the share of
+  non-positive weights.
+- **Appendix.** The outcome regression's fit, seconds per task, and the
+  tuning-grid edges.
 
-What result would make you change the claim? Write it down now, while it is
-cheap to be honest about.
+**What result would change the claims:**
+- Claim 1: a Riesz learner that covers below about 0.90 (at the final
+  replicate count) in a good-overlap DGP, or is resolved worse than the
+  reference plug-in by more than the accuracy threshold. Then that learner
+  is either left out of "the package works", with the reason stated, or the
+  claim narrows. RMSE × √n that grows with n in the TSM block.
+- Claim 2: a learner that is never resolved best has no justification from
+  α̂ alone; the paper then has to justify it some other way or drop it.
+- Claim 3: KL resolved worse than squared on α̂ anywhere.
+
+**Where the evidence stands (`pilot_cf5`, 5-fold cross-fitting, 50
+replicates, 2026-10-22).**
+- **Claim 1, ATE.**
+  - **Coverage.** In the 13 ATE DGPs, every Riesz learner covers 0.84–1.00,
+    except riesztree at the weakest overlap, γ = 3 (0.80). The next lowest
+    is augforestriesz, at 0.84 for γ = 2 and 3. With 50 replicates, coverage
+    has a Monte Carlo SE of about 0.03. The lowest values are all at the
+    two weakest-overlap rungs, γ = 2 and 3, the stated boundary.
+  - **Accuracy.** rieszboost, krrr, riesztree and forestriesz have one-step
+    RMSE 0.76–1.13 times the reference plug-in's. The one exception is
+    forestriesz on `bulk_feature`, at 1.33. riesznet, capped, is 0.89–1.24
+    times. augforestriesz is 0.89–1.17 times, resolved worse than the
+    reference plug-in on `overlap_g1` (1.17, z = 3.2) and `step` (1.15,
+    z = 3.4). On `steps10` every Riesz learner is 0.89–0.94 times the
+    plug-in and covers 0.92–0.96.
+  - **Rate.** In the TSM block, RMSE × √n is flat or falling from n = 250 to
+    4000, and the Riesz learners cover 0.90–0.96.
+- **Claims 1 and 4, the other estimands.**
+  - **ATT.** Every method covers 0.86–1.00 in all 13 DGPs; the lowest are
+    at γ = 3 (plug-in clipped at 0.01 0.88, krrr 0.86). Against the plug-in
+    clipped at 0.05, no Riesz learner is resolved worse anywhere (largest
+    z = 2.3). Its RMSE ratio is 0.86–1.22 for every learner except
+    rieszboost, which reaches 1.58 on `bulk_feature` (unresolved). The
+    plug-in clipped at 0.05 is itself up to 1.44 times better than the one
+    clipped at 0.01, at γ = 3.
+  - **Additive shift.** krrr ties the classification plug-in on all four
+    DGPs; rieszboost does not (gap 2).
+  - **LASE.** The Riesz learners cover 0.86–0.98, and their RMSE is
+    0.92–1.16 times the classification plug-in's, with nothing resolved.
+- **Claim 2, learners.**
+  - **α̂ crossover.** In the ATE, krrr is resolved best with good overlap
+    (`overlap_g05`, `overlap_g1`, `logistic`, `interaction`; z from −3.4 to
+    −11.4), and forestriesz with weak overlap or many covariates
+    (`overlap_g2`, `overlap_g3`, `sparse50`; z from −5.4 to −12.2). Each is
+    4–26% worse where the other wins. In the ATT, forestriesz is resolved
+    best on `overlap_g3`, `smooth`, `sparse50`, `additive` and `steps10`,
+    and krrr on `interaction`. On the additive shift, krrr is resolved best
+    on `shift_bimodal` and riesznet on `shift_skew`. On the LASE, rieszboost
+    is resolved best in all four DGPs (z from −2.8 to −16).
+  - **`steps10`.** rieszboost is resolved best for the ATE (z = −3.4), but
+    only 1% ahead of forestriesz; for the ATT, forestriesz is resolved best
+    and rieszboost is 3% behind.
+  - **Why the differences shrink in ψ̂.** Every method in a replicate uses
+    the same fitted outcome regression μ̂, so ψ̂'s error splits into the
+    oracle's error, shared by every method, and a method-specific part from
+    α̂, mostly the remainder mean[(α̂ − α₀)(μ₀ − μ̂)].
+    In the 12 ATE DGPs with good or moderate overlap, the shared part has
+    standard deviation 0.07–0.14 and the α̂ part is 0.25–0.83 times as
+    large, so a 15–67% spread in α̂'s RMSE becomes a 6–61% spread in ψ̂'s,
+    the largest where one learner does badly. Best against runner-up is
+    not resolvable at these replicate counts, which is why no learner is
+    resolved best on ψ̂ in any ATE DGP. In the additive shift the α̂ part
+    is 0.61–2.22 times the shared part, so ψ̂'s RMSE spreads 1.4–4.5 times
+    across learners (paper, Table `tab:decomp`). If
+    the remainder shrinks faster than 1/√n, these differences fade with n.
+- **Claim 3, losses.** KL's α̂ RMSE is 10–22% below the squared loss's on
+  `additive` and `additive_g2` at n = 1000 and 4000 (z from −8.6 to −35),
+  and the gap grows with n. The two tie at n = 250 and on `interaction`.
+  On ψ̂ there is no gain; at `additive`, n = 4000, KL is slightly worse
+  (z = 3.5). The squared loss gives a non-positive weight to at most 1.7%
+  of treated units (on `additive_g2`), a share that also rises with n.
+
+**Gaps.**
+1. **riesznet needs the cap, and a tighter one for the ATT.** Uncapped, its
+   one-step RMSE is 6–7 times the reference plug-in's on `overlap_g3`,
+   `tail_feature` and `bulk_feature` (ATE). With |α̂| ≤ 100 it is at most
+   1.24 times for the ATE. For the ATT, |α̂| ≤ 100 still left 1–2 blow-up
+   replicates per DGP and RMSE up to 1.73 times: α̂(0, x), whose truth
+   −π(x)/(1 − π(x)) is large where controls are scarce (π(x) near 1), drifts there, because only
+   treated rows push it and only control rows hold it back. CV cannot catch
+   it (it picks every learning rate about equally often). With |α̂| ≤ 19 it
+   is 0.80–1.22 times the plug-in clipped at 0.01 and never resolved worse
+   than the plug-in clipped at 0.05. The paper has to say which cap is used
+   for which estimand, and why.
+2. **rieszboost on the additive shift.** Its one-step RMSE is 2.7–4.6 times
+   the classification plug-in's on three of the four DGPs, and it covers 0.84 on
+   `shift_bimodal`. Capping helps only partly (2.0–4.1 times). riesznet,
+   capped, is 2.0 times on `shift_hetero`.
+3. **The rate covers one learner.** rieszboost is the TSM block's only Riesz
+   learner (with two losses). Either add the other learners to the TSM
+   block, or narrow part 3 to rieszboost.
+4. **augforestriesz passes, but is the weaker forest.** Rerun on Savio on
+   2026-10-22, after the first run failed on a stale compiled riesztree. It
+   meets the proposed coverage and accuracy rules. But its α̂ RMSE is
+   resolved worse than forestriesz's in 7 of the 12 ordinary ATE DGPs (z
+   from 6.1 to 60, largest on `overlap_g3` and `overlap_g2`) and better in
+   none. Since the package recommends it, the paper should either say why,
+   or show forestriesz as the package's forest.
+5. **Learners that never win.** riesztree and augforestriesz are resolved
+   best on α̂ nowhere, and riesznet only on `shift_skew`. Claim 2 justifies
+   krrr, forestriesz and rieszboost; the others need another reason, or
+   the claim has to say they are alternatives.
+6. **The classification plug-in has the best α̂ on the LASE** (0.57–0.98
+   times the best Riesz learner's), though ψ̂ ties. The edge comes from the
+   estimand's structure, not from a better density ratio. The LASE's
+   representer, α₀ = 1(a < t + δ) r − 1(a < t), with r the density ratio,
+   jumps along the continuous exposure at the threshold a = t and at the
+   shifted threshold a = t + δ. The plug-in applies those indicators
+   exactly; the Riesz learners must learn the jumps. On `shift_gauss`, the
+   plug-in's α̂ error is 0 above t + δ (Riesz learners 0.10–0.28) and 0.19
+   between t and t + δ (0.38–0.60); below t the methods are closer. On the
+   additive shift, which has no indicators, krrr's α̂ beats the classifier
+   in all four DGPs. The ATT has no such problem: its indicator is on a
+   binary treatment, which every learner separates exactly, and within each
+   arm the true representer α₀ is smooth in x. A structured Riesz estimate,
+   1(a < t + δ)(α̂_shift + 1) − 1(a < t), built from an additive-shift fit,
+   would apply the indicators exactly too; it was not tried.
+7. **The loss's pro does not reach ψ̂, and it is not a small-n effect.**
+   Claim 3 rests on α̂ only. The hypothesis that KL helps most at small n is
+   not supported: the two tie at n = 250, and KL's lead grows with n.
+8. **Replicates.** At 50, coverage has a Monte Carlo SE of about 0.03.
+   Pinning it to about ±0.01 needs about 500 replicates: the variance of one
+   replicate's coverage indicator, 0.95 × 0.05, divided by 0.01², is about
+   475.
 
 ## 4. DGPs and settings
 
@@ -77,6 +345,11 @@ default).
 - **Repetitions:** sized by the pilot.
 
 ### Candidate DGPs (draft, edit freely)
+
+*Since the rescope of 2026-10-22 (section 1), the claim 2 and claim 3
+rows below belong to the later paper (section 8). Several DGPs built from
+them (`smooth`, `step`, `sparse50`, `additive`, `interaction`) stay in this
+paper as ordinary DGPs.*
 
 A method wins where its built-in assumptions match α₀, or where a rival's
 known failure is switched on. So each DGP below starts from a mechanism, says
@@ -146,7 +419,7 @@ about 100 repetitions.
 
 ## 6. Pilot results (2026-10-20 to 21)
 
-**Notation used in sections 6 and 7.**
+**Notation used in sections 6 to 8.**
 
 The data and the estimator:
 - **Data.** X is the covariates, A the treatment or exposure, Y the outcome.
@@ -326,7 +599,7 @@ every method tied.
 (`dgp._mu`; the old one is `_mu_easy`):
 - Both f(X) and τ(X) now have two periods of a sine, products of covariates,
   a cosine of a sum and a step.
-- A linear fit in (A, X) now explains 13–22% of Var(μ), down from 85–89%,
+- A linear fit in (A, X) now explains 10–22% of Var(μ), down from 85–89%,
   and 8% of Var(τ), down from 49%.
 - ψ₀ is still exactly 1 for the ATE and the TSM. For the shift, a term
   nonlinear in A makes ψ₀ 0.20–0.33, integrated by Monte Carlo.
@@ -369,165 +642,9 @@ This costs one extra fit per replicate, and no α̂ refits. The other option,
 more replicates (hundreds) on the current design, would resolve differences
 that are real but small.
 
-### Hard representers: shared vs unshared features (50 replicates)
+### Hard representers and the alignment ladder
 
-**Design (`dgp.py`).** Four new ATE DGPs, with the hard outcome above.
-- **hard_shared:** the propensity logit is c·f(X), where f is the outcome's
-  own baseline (two periods of a sine, a product, a cosine of a sum, a step).
-- **hard_unshared:** the logit is the same f on the covariates permuted as
-  (X₃, X₁, X₄, X₅, X₂). None of its terms appears in μ or τ, or correlates
-  with one.
-- **Matched by construction.** The covariates are iid, so the two logits have
-  exactly the same distribution: the same overlap and the same difficulty.
-  They differ only in whether α₀'s hard features are μ's.
-- **Two overlap levels.** c = 0.78 and 1.56 match sd(logit) of overlap_g1
-  and overlap_g2.
-
-The large draw confirms the match: share with min(π, 1 − π) < 0.05 is 9.29%
-vs 9.30% at c = 1.56, and sd(α₀) is 3.15 for both. The logits are much
-harder than the ladder's (linear R² 0.10 vs 0.69). corr(logit, μ) is 0.91
-for shared and 0.07 for unshared. The full output is in
-`results/pilot_summary_hardalpha_0_50.txt`.
-
-**α̂ is equally hard to estimate in both.** Mean α̂ RMSE at c = 1.56:
-rieszboost 2.31 vs 2.27, krrr 2.38 vs 2.35, clipped plug-in 2.29 vs 2.32.
-
-**ψ̂ is not.** One-step estimator, n = 1000:
-
-| | oracle | best estimated method | worst | |bias|/empSE | coverage |
-|---|---|---|---|---|---|
-| hard_unshared_1 | RMSE 0.089, cover 0.94 | 0.079 (riesznet) | 0.092 | ≤ 0.12 | 0.94–1.00 |
-| hard_shared_1 | 0.093, 0.94 | 0.249 (krrr) | 0.302 (logit) | 2.0–3.0 | 0.08–0.32 |
-| hard_unshared_2 | 0.122, 0.98 | 0.111 (krrr) | 0.158 (XGB unclipped) | 0.06–1.0 | 0.80–0.92 |
-| hard_shared_2 | 0.165, 0.84 | 0.425 (XGB plug-in) | 0.641 (logit) | 2.8–5.0 | 0.00–0.16 |
-
-With shared features, every estimated method is biased by 0.22–0.29
-(c = 0.78) and 0.40–0.63 (c = 1.56), and coverage collapses. The oracle,
-which uses the same μ̂, stays nearly unbiased. So the bias is the product of
-the errors in α̂ and μ̂, and it shows up only when those errors fall on the
-same features. In the unshared version, every method sits next to the
-oracle. **The difficulty of α₀ on its own did not matter. What mattered is
-whether α₀ is hard in the same way μ is.** Here, 15 and 20 of 22 contrasts
-reach |z| > 2 in the shared DGPs, against 0 and 2 in the unshared ones.
-
-**How the methods compare once ψ̂ depends on α̂ (hard_shared_2):**
-
-| method | ψ̂ RMSE |
-|---|---|
-| XGBoost plug-in (unclipped or clipped at 0.01) | 0.425 |
-| XGBoost plug-in, clipped at 0.05 | 0.430 |
-| krrr | 0.458 (z = 1.7 against the clipped plug-in) |
-| rieszboost | 0.486 (z = 4.0) |
-| riesznet | 0.490 |
-| ForestRiesz | 0.555 (z = 9.5) |
-| riesztree | 0.568 |
-| main-terms logistic plug-in | 0.641 |
-
-So the Riesz learners are not better here, and the tree-based ones are
-clearly worse. The ordering by α̂ RMSE (rieszboost best) does not predict the
-ordering by ψ̂. What matters for ψ̂ is the part of α̂'s error that lies along
-μ̂'s error, not its overall size.
-
-**What this means for the design.**
-- The shared-feature DGP is where the claims about α̂ actually show up in ψ̂.
-  Every claim that is meant to be judged on ψ̂ should be tested there.
-- At n = 1000 every method fails in it. That is useful as an "and not when"
-  boundary, but no method covers, so it says little about which one to use.
-- An intermediate regime is needed, where methods differ and some still
-  cover. Two ways to get it: a ladder of the share of hard features that the
-  propensity and the outcome have in common (0, 1/3, 2/3, 1 of the terms of
-  f), or the same DGP at n = 4000 and 16000.
-
-### The alignment ladder (50 replicates)
-
-**Design.** The logit is c·[w f(X) + √(1 − w²) f(X permuted)] / k_w, for
-w = 0, 1/3, 2/3, 1. The endpoints are hard_unshared and hard_shared. k_w
-corrects for the small correlation (−0.0625) between the two parts, so
-sd(logit) is the same at every w.
-- **Overlap is matched along the ladder.** At c = 1.56, 9.3–9.5% of units
-  have min(π, 1 − π) < 0.05 and sd(α₀) is 3.15–3.19 at every rung. The
-  middle rungs have slightly heavier extreme tails (0.5–0.65% of units with
-  min(π, 1 − π) < 0.01, against 0.25%).
-- **Alignment steps up.** corr(logit, μ) is 0.14, 0.41, 0.68 and 0.93.
-
-The DGPs are `mix33_*` and `mix67_*`, and the tables are in
-`results/pilot_mix_ladder_report.txt`.
-
-**α̂'s RMSE is flat along the ladder, but ψ̂'s bias rises with w for every
-estimated method.** The oracle stays unbiased throughout. So the bias of the
-one-step estimator is set by how much α̂'s error lines up with μ̂'s error,
-not by how large α̂'s error is.
-
-| w | overlap level 1: bias of estimated methods | |bias|/empSE | coverage | level 2: bias | coverage |
-|---|---|---|---|---|---|
-| 0 | 0.00–0.01 | ≤ 0.12 | 0.94–1.00 | −0.01 to −0.09 | 0.80–0.92 |
-| 1/3 | 0.04–0.05 | 0.45–0.66 | 0.88–0.92 | 0.05–0.11 | 0.76–0.94 |
-| 2/3 | 0.11–0.17 | 1.0–1.6 | 0.50–0.76 | 0.18–0.30 | 0.06–0.50 |
-| 1 | 0.22–0.29 | 2.0–3.0 | 0.08–0.32 | 0.40–0.63 | 0.00–0.16 |
-
-At every rung, the oracle's coverage is 0.84–0.98.
-
-**Which method does best changes along the ladder.** Paired z of the
-squared-error difference against the plug-in clipped at 0.01; negative means
-the method is better.
-- **w = 0:** the Riesz learners are slightly ahead. At level 2, krrr,
-  rieszboost and riesznet have z from −1.9 to −2.3.
-- **w = 1/3:** ForestRiesz is best. At level 2 its RMSE is 0.101 against
-  0.128 for the clipped plug-in (z = −2.4), and its coverage is 0.94. At
-  level 1, ForestRiesz and rieszboost are slightly ahead (z = −1.2).
-- **w = 2/3:** at level 1, ForestRiesz is narrowly best (0.154 against 0.161
-  for the plug-in, z = −1.5). At level 2, the XGBoost plug-in is best (0.219).
-  riesznet (z = 7.5) and riesztree (z = 4.8) are clearly worse.
-- **w = 1:** the XGBoost plug-in is best.
-- **Throughout:** the main-terms logistic plug-in is worst once w ≥ 2/3.
-
-Read with care: with 50 replicates most of these z values are between 1 and
-2.5.
-
-**The regime the ladder was built to find is w = 1/3.** The methods differ
-there, and several still cover (0.88–0.94). From w = 2/3 on, every method
-undercovers at n = 1000. The open question is whether that is a
-finite-sample effect, which the n ladder would show by bias/SE shrinking with
-n, or a rate problem, which would show as bias/SE growing with n.
-
-### The middle rungs at 200 replicates
-
-Same design, replicates 0–199 on the w = 1/3 and 2/3 rungs at both overlap
-levels. The tables are in `results/pilot_mid_rungs_200.txt`. A contrast is
-treated as resolved at |z| ≥ 3, since about 36 are being compared. The z
-values are paired, on squared error, against the plug-in clipped at 0.01.
-
-| rung | best estimated method (ψ̂ RMSE) | clipped plug-in | resolved | coverage |
-|---|---|---|---|---|
-| w = 1/3, level 1 | ForestRiesz 0.096 | 0.105 | none. All methods are within 0.096–0.105; ForestRiesz z = −2.5, rieszboost z = −2.2 | 0.89–0.93 (oracle 0.96) |
-| w = 2/3, level 1 | ForestRiesz 0.153 | 0.158 (z = −2.7) | krrr (+4.4), riesznet (+7.1) and the logistic plug-in (+10.1) are worse than the clipped plug-in | 0.48–0.73 (oracle 0.92) |
-| w = 1/3, level 2 | **ForestRiesz 0.108** | 0.141 | **ForestRiesz beats the clipped plug-in (z = −5.8) and every other method (z ≥ 4.6).** riesztree (−3.0) and the plug-in clipped at 0.05 (−3.6) also beat the plug-in clipped at 0.01 | ForestRiesz 0.885; others 0.77–0.90 (oracle 0.965) |
-| w = 2/3, level 2 | **XGBoost plug-in 0.220** | — | **Every Riesz learner is worse:** ForestRiesz +3.6, rieszboost +4.1, krrr +5.0, riesztree +6.4, riesznet +12 | plug-in 0.505; Riesz 0.15–0.38 (oracle 0.925) |
-
-The Monte Carlo SE of RMSE is 0.005–0.008, and of coverage 0.02–0.035.
-
-**What is resolved**
-- **The two weak-overlap rungs (level 2) cross over.** At w = 1/3,
-  ForestRiesz is the best method by a clear margin. Its RMSE, 0.108, is
-  even below the oracle's 0.126 (z = 1.5, unresolved): it shrinks the
-  extreme weights, and its bias (0.054) costs less than the variance it
-  saves. At w = 2/3, every Riesz learner is worse than the XGBoost plug-in.
-- **The XGBoost plug-in has the lowest bias at strong alignment** (0.183 at
-  w = 2/3, level 2, against 0.215–0.280 for the Riesz learners). A
-  hypothesis to test, not a finding: the Riesz loss's shrinkage of extreme
-  weights adds bias exactly where μ̂ is wrong. A semi-oracle that uses the
-  true μ with each α̂ would check it, since its bias would then be zero for
-  every method.
-- **With good overlap (level 1), methods are nearly tied at w = 1/3.** At
-  w = 2/3, krrr, riesznet and the logistic plug-in are resolved as worse.
-- **Coverage.** No estimated method reaches 0.95 on any middle rung. At
-  w = 1/3 the best are around 0.89–0.93.
-
-**What this means for claim 1.** "Riesz regression is not worse than
-plug-in" holds where the propensity and the outcome share little, and fails
-where they share a lot and overlap is weak. "Riesz is better under practical
-positivity violations" holds in one resolved case, ForestRiesz at w = 1/3
-with weak overlap. The ladder gives the claim its "when" and its "not when".
+Moved to section 8 (2026-10-22), with the middle rungs at 200 replicates.
 
 ### Rerun with the moved grids (v2)
 
@@ -978,37 +1095,8 @@ under practical positivity violations.**
 - *Clipping does not change claim 1.* With every Riesz learner's |α̂|
   capped as the plug-in's is, the resolved ψ̂ contrasts against the plug-in
   clipped at the same c are the same as without the cap.
-- *Better:* **supported in one resolved case, robust to the change of tuning.**
-  ForestRiesz at w = 1/3 with weak overlap has ψ̂ RMSE 0.102, against 0.139
-  for the clipped plug-in (z = −4.4, 200 replicates) and 0.125 for the
-  oracle. Its coverage is 0.925. A second resolved win, ForestRiesz at
-  w = 2/3 with good overlap (z = −3.5), is small (0.148 against 0.155).
-  The single-split wins at w = 1/3 with good overlap are gone under CV. They
-  came from the plug-in's noisy tuning.
-- *Not when:* **resolved, and stronger under CV.** At w = 2/3 with weak
-  overlap, every Riesz learner is worse than the XGBoost plug-in (z from
-  +3.2 for ForestRiesz to +15 for riesznet). At w = 1:
-  - riesztree is resolved worse at both overlap levels;
-  - ForestRiesz is resolved worse at weak overlap;
-  - krrr and riesznet are resolved worse at good overlap.
-- *Mechanism:* **well supported.** The crossover is bias, not variance.
-  - With the true outcome regression μ₀ (the semi-oracle), every Riesz
-    learner beats the plug-in on both weak-overlap middle rungs.
-  - With μ̂, ψ̂'s bias is the remainder. The remainder is exactly s·B plus
-    mean[r e]:
-    - the shrinkage s says how far α̂ is shrunk toward zero;
-    - B is approximately the bias of the outcome-only plug-in;
-    - mean[r e] is the part that does not rescale α₀.
-  - Sharing hard features makes B large (−0.14 to 0.61 along the ladder at
-    weak overlap).
-  - The Riesz learners shrink more than the XGBoost plug-in (s = 0.41–0.53
-    against 0.35–0.39), so they leave more of B uncorrected.
-  - ForestRiesz's win at w = 1/3 comes from the other part of the remainder,
-    which is nearly zero for it.
-  - The decomposition is only accounting. The evidence is three findings:
-    - s·B is 65–81% of the remainder;
-    - across methods, the s–remainder correlation flips sign with B;
-    - the semi-oracle result.
+- *Better, not when, and mechanism:* these rested on the alignment ladder
+  and moved to section 8.
 - *Tuning loss vs model class:* **the loss used for selection is not what
   matters.** Tuning the XGBoost plug-in on the Riesz loss (`plugin_xgb_rl`)
   makes its α̂ worse or no better everywhere, and leaves ψ̂ unchanged. This
@@ -1020,50 +1108,9 @@ under practical positivity violations.**
   single-split edge on the bimodal shift came from the classifier's
   tuning.
 
-**Claim 2: different learners win in different DGPs.**
-- **Supported on α̂, in fewer DGPs than before.** Under CV, the resolved
-  winners among Riesz learners are:
-  - krrr with good overlap (γ = 1) and on interaction;
-  - ForestRiesz with weak overlap (γ = 3), many covariates (sparse50), and on
-    three of the four middle rungs of the alignment ladder;
-  - rieszboost on the two endpoints of the ladder at weak overlap.
-- **Unresolved:** smooth, step, additive, tail, bulk and logistic. The
-  single-split picks for smooth and additive (rieszboost) and step
-  (riesztree) do not hold. riesztree is best nowhere.
-- **Two predictions failed:**
-  - kernels and nets were expected to win on smooth, but tree ensembles do
-    (unresolved);
-  - riesztree was expected to win on step.
-- **The plug-in is a real rival on α̂.** The XGBoost plug-in now beats every
-  Riesz learner on smooth, step and additive.
-- **On ψ̂, learners differ only where the propensity and the outcome share
-  structure.** There, ForestRiesz is best at w = 1/3, and riesznet and
-  riesztree are worst from w = 2/3 on.
-
-**Claim 3: different losses win in different DGPs.**
-- **Supported on α̂:** KL beats squared with an additive logit (z down to
-  −26) and on all four rungs of the TSM alignment ladder (z from −3.1 to
-  −8.9). The two tie with interactions.
-- **The low-n version is not supported.** The two tie at n = 250, and KL's
-  lead grows with n.
-- **Not supported on ψ̂ at 50 replicates,** even where ψ̂ depends on α̂
-  (`tsm_align`). The difference is at most z = −2.3, on mix67_2.
-  - The mechanism points the right way: KL shrinks less, so its remainder is
-    smaller by 0.005–0.007.
-  - But that is about 5% of ψ̂'s RMSE. About 90 replicates would resolve it
-    on mix67_2.
+**Claims 2 and 3** moved to section 8.
 
 **New claims the pilot turned up**
-- **The one-step estimator's bias depends on whether the propensity and the
-  outcome share hard structure, not on how hard α₀ is.** The evidence is
-  strong:
-  - hard_shared and hard_unshared, with identical difficulty and overlap,
-    behave completely differently.
-  - The alignment ladder shows a dose-response.
-  - The oracle stays unbiased throughout.
-  - The decomposition says why. Sharing raises the outcome-only plug-in's
-    bias B, and every estimated α̂, being shrunk, leaves a share s of B in
-    ψ̂.
 - **Under weak overlap, estimated weights can beat the true ones.**
   - At γ = 3, every Riesz learner except riesznet, and every plug-in clipped
     at 0.05, beats the oracle (0.131–0.192 against 0.213).
@@ -1080,29 +1127,8 @@ under practical positivity violations.**
 
 ### Still to investigate
 
-1. **Undersmoothing.** The remainder analysis says the Riesz learners lose
-   at strong sharing because they shrink the extreme weights. The squared
-   Riesz loss on held-out data picks the shrinkage that is best for α̂, not
-   for ψ̂.
-   - Test: on mix67_2 and mix33_2, take the Riesz learners' settings one
-     step less regularized than CV picks (a smaller L2 penalty for
-     rieszboost, a smaller minimum leaf for ForestRiesz).
-   - Measure whether the shrinkage s and the remainder fall by more than the
-     variance rises.
-   - The CV scores of every setting are already stored, but the refits with
-     other settings are not, so this needs new fits.
-2. **Sample size.** Run the middle rungs at n = 4000. The question is
-   whether bias/SE shrinks or grows with n.
-   - The bias is the expected remainder, E[s·B + mean[r e]]. The SE of ψ̂
-     is about σ/√n, where σ is the standard deviation of that method's
-     influence function m(μ̂) + α̂ (Y − μ̂) − ψ̂, and n is the size of the
-     estimation sample.
-   - So bias/SE ≈ E[s·B + mean[r e]]·√n / σ. It falls if and only if the
-     expected remainder falls faster than 1/√n.
-   - The decomposition says where to look. The outcome-only plug-in's bias B
-     falls as μ̂ improves. The shrinkage s may fall as CV picks less
-     regularization at larger n. Because s·B is a product of the two, both
-     help.
+Items 1, 2, 5 and 8 moved to section 8 (2026-10-22).
+
 3. **Coverage.** No estimated method reaches 0.95 on the middle rungs. On
    w = 1/3 with weak overlap, ForestRiesz reaches 0.925 and the others
    0.79–0.89. The questions are whether cross-fitting or a larger n fixes
@@ -1135,11 +1161,6 @@ under practical positivity violations.**
    The existing results used the old grids. The next run uses the new ones,
    and its edge table checks them. Single-split tuning is retired, and
    5-fold CV is now the protocol.
-5. **Claim 3 on ψ̂.** Run tsm_align at 200 replicates on mix67_2 and
-   hard_shared_2. That is enough to resolve the KL-vs-squared difference on
-   ψ̂ if it is as large as at 50 replicates. If it is still unresolved, the
-   honest version of claim 3 is "KL gives a better α̂, and the gain does not
-   reach ψ̂ at n = 1000".
 6. ~~**The plug-in tuned on the Riesz loss.**~~ **Dropped (2026-10-21).**
    This is for a later paper. `plugin_xgb_rl` is out of every block, and
    its results in section 6 stay as a record.
@@ -1183,9 +1204,6 @@ under practical positivity violations.**
      DGPs.
    - Does krrr's edge come from the loss or from the kernel? A
      kernel-family classifier would separate the two.
-8. **How far the ForestRiesz win extends.** Other levels of sharing
-   (w = 1/6, 1/2), other overlap levels, other n. The decomposition says to
-   look where the outcome-only plug-in's bias B is small but nonzero.
 9. **Leftover design issues.**
    - Redesign tail vs bulk on a base that is not nearly logistic, and with
      matched overlap.
@@ -1216,3 +1234,336 @@ under practical positivity violations.**
       nudge both treatment and outcome a little, and overlap re-matched.
       Closer to real empirical data. It needs a per-DGP outcome, so more
       work.
+
+## 8. Later paper: where methods are strong or weak
+
+Moved here on 2026-10-22, when this paper was rescoped to "the package works"
+(section 1). It is the record of what the pilots found, and the starting
+point for a later paper on where methods are strong or weak. Unless a part
+says otherwise, its results come from the sample-splitting runs
+(`results/pilot`, `results/pilot_cv5`), not from cross-fitting.
+
+### Claims
+
+| # | Claim | Who cares, and what would they do differently |
+|---|-------------------------------------------------------|------------------------------------------------------|
+| 2 | There are different DGPs where some learners work better than others for Riesz regression | |
+| 3 | There are different DGPs for which different losses work better than others (maybe low n?) | |
+
+Old claim 1's "better under practical positivity violations" half also
+belongs here, since its evidence is the alignment ladder.
+
+### Cross-fitting on the ladder (`pilot_cf5`, 2026-10-22)
+
+ATE coverage, from 50 replicates (200 on the four middle rungs, `mix33_*`
+and `mix67_*`):
+
+| DGP | oracle | reference plug-in (XGBoost, clipped at 0.01) | rieszboost | forestriesz |
+|---|---|---|---|---|
+| mix33_1 | 0.96 | 0.90 | 0.89 | 0.92 |
+| mix33_2 | 0.94 | 0.88 | 0.83 | 0.87 |
+| mix67_1 | 0.94 | 0.68 | 0.60 | 0.64 |
+| mix67_2 | 0.95 | 0.48 | 0.26 | 0.26 |
+| hard_shared_1 | 0.94 | 0.12 | 0.14 | 0.12 |
+| hard_shared_2 | 0.92 | 0.06 | 0.02 | 0.00 |
+
+- **The intervals have the right width and the wrong centre.** In these
+  cells the mean SE of ψ̂ is 0.82–1.05 times the empirical SE (the standard
+  deviation of ψ̂ over replicates), but the bias is 1.5–6 times the mean
+  SE. The bias equals the remainder mean[(α̂ − α₀)(μ₀ − μ̂)], and the
+  semi-oracle, which uses the true outcome regression μ₀ with the same α̂,
+  covers 0.90–0.96.
+- **Cross-fitting made coverage slightly worse,** as section 7 item 3
+  predicted. forestriesz on mix33_2 (w = 1/3, weak overlap) fell from
+  0.925 to 0.870, so its
+  coverage lead there is gone.
+- **Why the outcome regression leaves a large B,** the outcome-only
+  plug-in's bias. Let τ(X) = μ₀(1, X) − μ₀(0, X) denote the true treatment
+  effect, which is what the ATE averages. The fitted outcome regression μ̂
+  explains about 73% of the variance of the true μ₀ in every DGP, but its
+  implied effect μ̂(1, X) − μ̂(0, X) explains only about 20% of the variance
+  of τ (R² −0.68 on hard_shared_2). In the shared DGPs, μ̂'s error
+  concentrates where the true weights |α₀| are large. On hard_shared_2, the
+  RMSE of μ̂ is 1.11 in the top 10% of |α₀| against 0.79 overall,
+  corr(α₀, μ₀ − μ̂) = −0.31, and the outcome-only bias B = 0.77. On
+  hard_unshared_2 the overall RMSE is the same (0.78), but the correlation
+  is +0.07 and B = −0.16.
+- **What would shrink the outcome-only bias B:** a stronger outcome
+  library, a model that learns the effect τ directly (fits by arm, or
+  A × X features), or a larger n.
+
+### Pilot results moved from section 6
+
+#### Hard representers: shared vs unshared features (50 replicates)
+
+**Design (`dgp.py`).** Four new ATE DGPs, with the hard outcome above.
+- **hard_shared:** the propensity logit is c·f(X), where f is the outcome's
+  own baseline (two periods of a sine, a product, a cosine of a sum, a step).
+- **hard_unshared:** the logit is the same f on the covariates permuted as
+  (X₃, X₁, X₄, X₅, X₂). None of its terms appears in μ or τ, or correlates
+  with one.
+- **Matched by construction.** The covariates are iid, so the two logits have
+  exactly the same distribution: the same overlap and the same difficulty.
+  They differ only in whether α₀'s hard features are μ's.
+- **Two overlap levels.** c = 0.78 and 1.56 match sd(logit) of overlap_g1
+  and overlap_g2.
+
+The large draw confirms the match: share with min(π, 1 − π) < 0.05 is 9.29%
+vs 9.30% at c = 1.56, and sd(α₀) is 3.15 for both. The logits are much
+harder than the ladder's (linear R² 0.10 vs 0.69). corr(logit, μ) is 0.91
+for shared and 0.07 for unshared. The full output is in
+`results/pilot_summary_hardalpha_0_50.txt`.
+
+**α̂ is equally hard to estimate in both.** Mean α̂ RMSE at c = 1.56:
+rieszboost 2.31 vs 2.27, krrr 2.38 vs 2.35, clipped plug-in 2.29 vs 2.32.
+
+**ψ̂ is not.** One-step estimator, n = 1000:
+
+| | oracle | best estimated method | worst | |bias|/empSE | coverage |
+|---|---|---|---|---|---|
+| hard_unshared_1 | RMSE 0.089, cover 0.94 | 0.079 (riesznet) | 0.092 | ≤ 0.12 | 0.94–1.00 |
+| hard_shared_1 | 0.093, 0.94 | 0.249 (krrr) | 0.302 (logit) | 2.0–3.0 | 0.08–0.32 |
+| hard_unshared_2 | 0.122, 0.98 | 0.111 (krrr) | 0.158 (XGB unclipped) | 0.06–1.0 | 0.80–0.92 |
+| hard_shared_2 | 0.165, 0.84 | 0.425 (XGB plug-in) | 0.641 (logit) | 2.8–5.0 | 0.00–0.16 |
+
+With shared features, every estimated method is biased by 0.22–0.29
+(c = 0.78) and 0.40–0.63 (c = 1.56), and coverage collapses. The oracle,
+which uses the same μ̂, stays nearly unbiased. So the bias is the product of
+the errors in α̂ and μ̂, and it shows up only when those errors fall on the
+same features. In the unshared version, every method sits next to the
+oracle. **The difficulty of α₀ on its own did not matter. What mattered is
+whether α₀ is hard in the same way μ is.** Here, 15 and 20 of 22 contrasts
+reach |z| > 2 in the shared DGPs, against 0 and 2 in the unshared ones.
+
+**How the methods compare once ψ̂ depends on α̂ (hard_shared_2):**
+
+| method | ψ̂ RMSE |
+|---|---|
+| XGBoost plug-in (unclipped or clipped at 0.01) | 0.425 |
+| XGBoost plug-in, clipped at 0.05 | 0.430 |
+| krrr | 0.458 (z = 1.7 against the clipped plug-in) |
+| rieszboost | 0.486 (z = 4.0) |
+| riesznet | 0.490 |
+| ForestRiesz | 0.555 (z = 9.5) |
+| riesztree | 0.568 |
+| main-terms logistic plug-in | 0.641 |
+
+So the Riesz learners are not better here, and the tree-based ones are
+clearly worse. The ordering by α̂ RMSE (rieszboost best) does not predict the
+ordering by ψ̂. What matters for ψ̂ is the part of α̂'s error that lies along
+μ̂'s error, not its overall size.
+
+**What this means for the design.**
+- The shared-feature DGP is where the claims about α̂ actually show up in ψ̂.
+  Every claim that is meant to be judged on ψ̂ should be tested there.
+- At n = 1000 every method fails in it. That is useful as an "and not when"
+  boundary, but no method covers, so it says little about which one to use.
+- An intermediate regime is needed, where methods differ and some still
+  cover. Two ways to get it: a ladder of the share of hard features that the
+  propensity and the outcome have in common (0, 1/3, 2/3, 1 of the terms of
+  f), or the same DGP at n = 4000 and 16000.
+
+#### The alignment ladder (50 replicates)
+
+**Design.** The logit is c·[w f(X) + √(1 − w²) f(X permuted)] / k_w, for
+w = 0, 1/3, 2/3, 1. The endpoints are hard_unshared and hard_shared. k_w
+corrects for the small correlation (−0.0625) between the two parts, so
+sd(logit) is the same at every w.
+- **Overlap is matched along the ladder.** At c = 1.56, 9.3–9.5% of units
+  have min(π, 1 − π) < 0.05 and sd(α₀) is 3.15–3.19 at every rung. The
+  middle rungs have slightly heavier extreme tails (0.5–0.65% of units with
+  min(π, 1 − π) < 0.01, against 0.25%).
+- **Alignment steps up.** corr(logit, μ) is 0.14, 0.41, 0.68 and 0.93.
+
+The DGPs are `mix33_*` and `mix67_*`, and the tables are in
+`results/pilot_mix_ladder_report.txt`.
+
+**α̂'s RMSE is flat along the ladder, but ψ̂'s bias rises with w for every
+estimated method.** The oracle stays unbiased throughout. So the bias of the
+one-step estimator is set by how much α̂'s error lines up with μ̂'s error,
+not by how large α̂'s error is.
+
+| w | overlap level 1: bias of estimated methods | |bias|/empSE | coverage | level 2: bias | coverage |
+|---|---|---|---|---|---|
+| 0 | 0.00–0.01 | ≤ 0.12 | 0.94–1.00 | −0.01 to −0.09 | 0.80–0.92 |
+| 1/3 | 0.04–0.05 | 0.45–0.66 | 0.88–0.92 | 0.05–0.11 | 0.76–0.94 |
+| 2/3 | 0.11–0.17 | 1.0–1.6 | 0.50–0.76 | 0.18–0.30 | 0.06–0.50 |
+| 1 | 0.22–0.29 | 2.0–3.0 | 0.08–0.32 | 0.40–0.63 | 0.00–0.16 |
+
+At every rung, the oracle's coverage is 0.84–0.98.
+
+**Which method does best changes along the ladder.** Paired z of the
+squared-error difference against the plug-in clipped at 0.01; negative means
+the method is better.
+- **w = 0:** the Riesz learners are slightly ahead. At level 2, krrr,
+  rieszboost and riesznet have z from −1.9 to −2.3.
+- **w = 1/3:** ForestRiesz is best. At level 2 its RMSE is 0.101 against
+  0.128 for the clipped plug-in (z = −2.4), and its coverage is 0.94. At
+  level 1, ForestRiesz and rieszboost are slightly ahead (z = −1.2).
+- **w = 2/3:** at level 1, ForestRiesz is narrowly best (0.154 against 0.161
+  for the plug-in, z = −1.5). At level 2, the XGBoost plug-in is best (0.219).
+  riesznet (z = 7.5) and riesztree (z = 4.8) are clearly worse.
+- **w = 1:** the XGBoost plug-in is best.
+- **Throughout:** the main-terms logistic plug-in is worst once w ≥ 2/3.
+
+Read with care: with 50 replicates most of these z values are between 1 and
+2.5.
+
+**The regime the ladder was built to find is w = 1/3.** The methods differ
+there, and several still cover (0.88–0.94). From w = 2/3 on, every method
+undercovers at n = 1000. The open question is whether that is a
+finite-sample effect, which the n ladder would show by bias/SE shrinking with
+n, or a rate problem, which would show as bias/SE growing with n.
+
+#### The middle rungs at 200 replicates
+
+Same design, replicates 0–199 on the w = 1/3 and 2/3 rungs at both overlap
+levels. The tables are in `results/pilot_mid_rungs_200.txt`. A contrast is
+treated as resolved at |z| ≥ 3, since about 36 are being compared. The z
+values are paired, on squared error, against the plug-in clipped at 0.01.
+
+| rung | best estimated method (ψ̂ RMSE) | clipped plug-in | resolved | coverage |
+|---|---|---|---|---|
+| w = 1/3, level 1 | ForestRiesz 0.096 | 0.105 | none. All methods are within 0.096–0.105; ForestRiesz z = −2.5, rieszboost z = −2.2 | 0.89–0.93 (oracle 0.96) |
+| w = 2/3, level 1 | ForestRiesz 0.153 | 0.158 (z = −2.7) | krrr (+4.4), riesznet (+7.1) and the logistic plug-in (+10.1) are worse than the clipped plug-in | 0.48–0.73 (oracle 0.92) |
+| w = 1/3, level 2 | **ForestRiesz 0.108** | 0.141 | **ForestRiesz beats the clipped plug-in (z = −5.8) and every other method (z ≥ 4.6).** riesztree (−3.0) and the plug-in clipped at 0.05 (−3.6) also beat the plug-in clipped at 0.01 | ForestRiesz 0.885; others 0.77–0.90 (oracle 0.965) |
+| w = 2/3, level 2 | **XGBoost plug-in 0.220** | — | **Every Riesz learner is worse:** ForestRiesz +3.6, rieszboost +4.1, krrr +5.0, riesztree +6.4, riesznet +12 | plug-in 0.505; Riesz 0.15–0.38 (oracle 0.925) |
+
+The Monte Carlo SE of RMSE is 0.005–0.008, and of coverage 0.02–0.035.
+
+**What is resolved**
+- **The two weak-overlap rungs (level 2) cross over.** At w = 1/3,
+  ForestRiesz is the best method by a clear margin. Its RMSE, 0.108, is
+  even below the oracle's 0.126 (z = 1.5, unresolved): it shrinks the
+  extreme weights, and its bias (0.054) costs less than the variance it
+  saves. At w = 2/3, every Riesz learner is worse than the XGBoost plug-in.
+- **The XGBoost plug-in has the lowest bias at strong alignment** (0.183 at
+  w = 2/3, level 2, against 0.215–0.280 for the Riesz learners). A
+  hypothesis to test, not a finding: the Riesz loss's shrinkage of extreme
+  weights adds bias exactly where μ̂ is wrong. A semi-oracle that uses the
+  true μ with each α̂ would check it, since its bias would then be zero for
+  every method.
+- **With good overlap (level 1), methods are nearly tied at w = 1/3.** At
+  w = 2/3, krrr, riesznet and the logistic plug-in are resolved as worse.
+- **Coverage.** No estimated method reaches 0.95 on any middle rung. At
+  w = 1/3 the best are around 0.89–0.93.
+
+**What this means for claim 1.** "Riesz regression is not worse than
+plug-in" holds where the propensity and the outcome share little, and fails
+where they share a lot and overlap is weak. "Riesz is better under practical
+positivity violations" holds in one resolved case, ForestRiesz at w = 1/3
+with weak overlap. The ladder gives the claim its "when" and its "not when".
+
+### Evidence moved from section 7
+
+**Old claim 1: the parts that rested on the ladder.**
+- *Better:* **supported in one resolved case, robust to the change of tuning.**
+  ForestRiesz at w = 1/3 with weak overlap has ψ̂ RMSE 0.102, against 0.139
+  for the clipped plug-in (z = −4.4, 200 replicates) and 0.125 for the
+  oracle. Its coverage is 0.925. A second resolved win, ForestRiesz at
+  w = 2/3 with good overlap (z = −3.5), is small (0.148 against 0.155).
+  The single-split wins at w = 1/3 with good overlap are gone under CV. They
+  came from the plug-in's noisy tuning.
+- *Not when:* **resolved, and stronger under CV.** At w = 2/3 with weak
+  overlap, every Riesz learner is worse than the XGBoost plug-in (z from
+  +3.2 for ForestRiesz to +15 for riesznet). At w = 1:
+  - riesztree is resolved worse at both overlap levels;
+  - ForestRiesz is resolved worse at weak overlap;
+  - krrr and riesznet are resolved worse at good overlap.
+- *Mechanism:* **well supported.** The crossover is bias, not variance.
+  - With the true outcome regression μ₀ (the semi-oracle), every Riesz
+    learner beats the plug-in on both weak-overlap middle rungs.
+  - With μ̂, ψ̂'s bias is the remainder. The remainder is exactly s·B plus
+    mean[r e]:
+    - the shrinkage s says how far α̂ is shrunk toward zero;
+    - B is approximately the bias of the outcome-only plug-in;
+    - mean[r e] is the part that does not rescale α₀.
+  - Sharing hard features makes B large (−0.14 to 0.61 along the ladder at
+    weak overlap).
+  - The Riesz learners shrink more than the XGBoost plug-in (s = 0.41–0.53
+    against 0.35–0.39), so they leave more of B uncorrected.
+  - ForestRiesz's win at w = 1/3 comes from the other part of the remainder,
+    which is nearly zero for it.
+  - The decomposition is only accounting. The evidence is three findings:
+    - s·B is 65–81% of the remainder;
+    - across methods, the s–remainder correlation flips sign with B;
+    - the semi-oracle result.
+
+**Claim 2: different learners win in different DGPs.**
+- **Supported on α̂, in fewer DGPs than before.** Under CV, the resolved
+  winners among Riesz learners are:
+  - krrr with good overlap (γ = 1) and on interaction;
+  - ForestRiesz with weak overlap (γ = 3), many covariates (sparse50), and on
+    three of the four middle rungs of the alignment ladder;
+  - rieszboost on the two endpoints of the ladder at weak overlap.
+- **Unresolved:** smooth, step, additive, tail, bulk and logistic. The
+  single-split picks for smooth and additive (rieszboost) and step
+  (riesztree) do not hold. riesztree is best nowhere.
+- **Two predictions failed:**
+  - kernels and nets were expected to win on smooth, but tree ensembles do
+    (unresolved);
+  - riesztree was expected to win on step.
+- **The plug-in is a real rival on α̂.** The XGBoost plug-in now beats every
+  Riesz learner on smooth, step and additive.
+- **On ψ̂, learners differ only where the propensity and the outcome share
+  structure.** There, ForestRiesz is best at w = 1/3, and riesznet and
+  riesztree are worst from w = 2/3 on.
+
+**Claim 3: different losses win in different DGPs.**
+- **Supported on α̂:** KL beats squared with an additive logit (z down to
+  −26) and on all four rungs of the TSM alignment ladder (z from −3.1 to
+  −8.9). The two tie with interactions.
+- **The low-n version is not supported.** The two tie at n = 250, and KL's
+  lead grows with n.
+- **Not supported on ψ̂ at 50 replicates,** even where ψ̂ depends on α̂
+  (`tsm_align`). The difference is at most z = −2.3, on mix67_2.
+  - The mechanism points the right way: KL shrinks less, so its remainder is
+    smaller by 0.005–0.007.
+  - But that is about 5% of ψ̂'s RMSE. About 90 replicates would resolve it
+    on mix67_2.
+
+**A claim the pilot turned up**
+- **The one-step estimator's bias depends on whether the propensity and the
+  outcome share hard structure, not on how hard α₀ is.** The evidence is
+  strong:
+  - hard_shared and hard_unshared, with identical difficulty and overlap,
+    behave completely differently.
+  - The alignment ladder shows a dose-response.
+  - The oracle stays unbiased throughout.
+  - The decomposition says why. Sharing raises the outcome-only plug-in's
+    bias B, and every estimated α̂, being shrunk, leaves a share s of B in
+    ψ̂.
+
+### Still to investigate, moved from section 7
+
+- **Undersmoothing.** The remainder analysis says the Riesz learners lose
+   at strong sharing because they shrink the extreme weights. The squared
+   Riesz loss on held-out data picks the shrinkage that is best for α̂, not
+   for ψ̂.
+   - Test: on mix67_2 and mix33_2, take the Riesz learners' settings one
+     step less regularized than CV picks (a smaller L2 penalty for
+     rieszboost, a smaller minimum leaf for ForestRiesz).
+   - Measure whether the shrinkage s and the remainder fall by more than the
+     variance rises.
+   - The CV scores of every setting are already stored, but the refits with
+     other settings are not, so this needs new fits.
+- **Sample size.** Run the middle rungs at n = 4000. The question is
+   whether bias/SE shrinks or grows with n.
+   - The bias is the expected remainder, E[s·B + mean[r e]]. The SE of ψ̂
+     is about σ/√n, where σ is the standard deviation of that method's
+     influence function m(μ̂) + α̂ (Y − μ̂) − ψ̂, and n is the size of the
+     estimation sample.
+   - So bias/SE ≈ E[s·B + mean[r e]]·√n / σ. It falls if and only if the
+     expected remainder falls faster than 1/√n.
+   - The decomposition says where to look. The outcome-only plug-in's bias B
+     falls as μ̂ improves. The shrinkage s may fall as CV picks less
+     regularization at larger n. Because s·B is a product of the two, both
+     help.
+- **Claim 3 on ψ̂.** Run tsm_align at 200 replicates on mix67_2 and
+   hard_shared_2. That is enough to resolve the KL-vs-squared difference on
+   ψ̂ if it is as large as at 50 replicates. If it is still unresolved, the
+   honest version of claim 3 is "KL gives a better α̂, and the gain does not
+   reach ψ̂ at n = 1000".
+- **How far the ForestRiesz win extends.** Other levels of sharing
+   (w = 1/6, 1/2), other overlap levels, other n. The decomposition says to
+   look where the outcome-only plug-in's bias B is small but nonzero.
