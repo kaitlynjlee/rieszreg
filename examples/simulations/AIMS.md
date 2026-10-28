@@ -33,13 +33,15 @@ or weak, including the alignment results, stays in a later paper
 
 | # | Claim | Who cares, and what would they do differently |
 |---|-------------------------------------------------------|------------------------------------------------------|
-| 1 | **The package works.** For the average treatment effect (ATE), the average treatment effect on the treated (ATT), the treatment-specific mean (TSM), the additive shift effect and the local additive shift effect (LASE), the package's Riesz learners (rieszboost, riesznet, krrr, riesztree and the forests) give one-step estimates whose 95% intervals cover close to 95%, whose root mean squared error (RMSE) is comparable to a well-tuned plug-in, and whose error shrinks at the √n rate as n grows. Coverage and accuracy degrade as overlap weakens. | Researchers who want a package for empirical work. They can use it for these estimands without first checking it against a plug-in, and they know weak overlap is where to be careful. |
-| 2 | **Several learners earn their place.** No Riesz learner has the most accurate representer in every data-generating process (DGP): krrr wins with good overlap, forestriesz with weak overlap or many covariates, and rieszboost on the LASE. The choice reaches ψ̂ mainly where the representer is hard to estimate (weak overlap, continuous exposures); in ordinary binary-treatment DGPs its value for ψ̂ is avoiding a poor learner. | Users choosing a learner: which one to try first, and when the choice matters for the final estimate. |
-| 3 | **A second loss earns its place.** For a TSM, the KL loss gives a more accurate representer than the squared loss when the propensity logit is additive, and its lead grows with n. The two tie at n = 250 and when the logit has interactions, and the gain does not reach ψ̂ at these sample sizes. | Users who need positive weights or who use the representer itself (for example as weights), and anyone choosing a loss. |
+| 1 | **The package works.** For the average treatment effect (ATE), the average treatment effect on the treated (ATT), the treatment-specific mean (TSM), the additive shift effect and the local additive shift effect (LASE), the package's Riesz learners (rieszboost, riesznet, krrr, riesztree and the forests) give one-step estimates whose 95% intervals cover close to 95% when overlap is good, whose root mean squared error (RMSE) is within 1.25 times a well-tuned plug-in's, and whose error shrinks at the √n rate as n grows. Coverage falls below 0.95 from moderate overlap on (γ = 2), for every learner. | Researchers who want a package for empirical work. They can use it for these estimands without first checking it against a plug-in, and they know weak overlap is where to be careful. |
+| 2 | **Several learners earn their place.** No Riesz learner has the most accurate representer in every data-generating process (DGP): krrr wins with good overlap and with interactions, forestriesz with weak overlap or many covariates, rieszboost on the LASE and on a sum of steps, riesznet on a skewed exposure. riesztree and augforestriesz win nowhere. The choice reaches ψ̂ mainly where the representer is hard to estimate (weak overlap, continuous exposures); in ordinary binary-treatment DGPs its value for ψ̂ is avoiding a poor learner. | Users choosing a learner: which one to try first, and when the choice matters for the final estimate. |
+| 3 | **A second loss earns its place.** For a TSM, the KL loss gives a more accurate representer than the squared loss when the propensity logit is additive, and its lead grows with n. The two tie at n = 250; when the logit has interactions KL is slightly worse (3% at n = 1000); and the gain does not reach ψ̂ at these sample sizes. | Users who need positive weights or who use the representer itself (for example as weights), and anyone choosing a loss. |
 | 4 | **The estimands are useful.** One interface fits five estimands, including two ratio estimands (the ATT and the LASE), and each gives a working one-step estimator. | Users whose question is not the ATE. |
 
-The "and not when" halves: weak overlap for claim 1; ψ̂ in ordinary
-binary-treatment DGPs for claim 2; small n, interactions and ψ̂ for claim 3.
+The "and not when" halves: moderate and weak overlap for claim 1's
+coverage; ψ̂ in ordinary binary-treatment DGPs for claim 2; small n,
+interactions and ψ̂ for claim 3. (Rewritten for the final run,
+2026-10-28.)
 
 **What moved to the later paper (section 8), and what came back:**
 - old claims 2 and 3, as questions of *when and why* a learner or a loss
@@ -122,8 +124,8 @@ five estimands.
   so its replicates pair with the final run's). The pilot `pilot_cf5` used
   5-fold cross-fitting with the tuning nested in each fold instead; that
   costs 4–5 times as much, which is why the final run splits.
-- **Replicates.** 500, sized from the first 200 of the final run (see
-  "Replicates" below). Coverage then has a Monte Carlo SE of about 0.010.
+- **Replicates.** 500 in every cell, sized from the first 200 of the
+  final run (see gap 6). Coverage has a Monte Carlo SE of about 0.010.
 - **DGPs.** All are in `dgp.py`.
   - **ATE, 8 core DGPs (main text, 500 replicates):**
     - the overlap ladder, `overlap_g05` to `overlap_g3`, for the boundary;
@@ -133,17 +135,21 @@ five estimands.
       and a TSM DGP);
     - `steps10`, built for rieszboost: 20 covariates, a logit that adds ten
       centred steps, overlap matched to `overlap_g1`.
-  - **ATE, 5 appendix DGPs (200 replicates; user's decision, 2026-10-23):**
+  - **ATE, 5 appendix DGPs (user's decision, 2026-10-23):**
     `tail_feature` and `bulk_feature` (a sharp propensity feature where the
     true representer α₀ is large and where it is near 2), `smooth`, `step`
     and `additive`. They repeat what the core DGPs show for the claims: their
     resolved α̂ winner is forestriesz, which already wins on the ladder and
     `sparse50`, or there is none, and the tail-versus-bulk question is a
     "when and why" question for the later paper. They stay in the paper
-    because three of them hold failures the claims must state: riesztree
-    and augforestriesz resolved worse than the plug-in on `tail_feature`
-    and `step` (ATE and ATT), and on the ATT rieszboost and forestriesz at
-    1.33 and 1.40 times the plug-in on `bulk_feature`.
+    because they hold failures the claims must state (500 replicates,
+    capped): riesztree and augforestriesz resolved worse than the plug-in
+    on `tail_feature` and `step` in both the ATE and the ATT (1.12–1.21),
+    augforestriesz also on `bulk_feature` and, for the ATT, `smooth`;
+    rieszboost on the ATE's `bulk_feature` (1.20); forestriesz on the ATT's
+    `tail_feature` and `bulk_feature` (1.11, 1.07). The extension was meant
+    to leave them at 200, but Savio ran the old `savio_final.sh`, so they
+    have 500 like the rest.
   - **ATT:** the same 8 core and 5 appendix DGPs.
   - **TSM:** `additive`, `additive_g2` and `interaction`.
   - **Shift and LASE:** `shift_gauss`, `shift_hetero`, `shift_skew` and
@@ -182,7 +188,7 @@ five estimands.
     10⁵; riesznet's learning rate 3·10⁻⁵ to 10⁻¹; riesztree's leaves
     {2, …, 24} and minimum leaf adding 2). The outcome regression is XGBoost
     tuned on squared error, shared by every method in a replicate.
-  - **Edge check, final run (200 replicates).** No tuned hyperparameter
+  - **Edge check, final run (500 replicates; the same at 200).** No tuned hyperparameter
     sits on a grid edge that is not a hard limit in 15% or more of fits.
     The edges chosen that often are all hard limits: depth 1 (rieszboost
     24% in the ATE, rieszboost_kl 32% in the TSM, the XGBoost propensity
@@ -195,9 +201,14 @@ five estimands.
     whose propensity is clipped to [c, 1 − c] can reach (1/c for the ATE and
     TSM, (1 − c)/c for the ATT and the LASE, (1 − c)/c − 1 for the shift),
     at clipping levels c = 0.01 and 0.05. Only the predictions are capped;
-    the fit and its tuning are not. riesznet is reported capped: at c = 0.01
-    (|α̂| ≤ 100), and for the ATT at c = 0.05 (|α̂| ≤ 19), against the plug-in
-    clipped at 0.05 (see gap 1). The other learners are reported as fitted.
+    the fit and its tuning are not. **Every Riesz learner is reported
+    capped at its reference plug-in's level** (user's decision,
+    2026-10-28; `pilot.py`'s `CAP` and `headline`): c = 0.01 for the ATE
+    and TSM (|α̂| ≤ 100), c = 0.05 for the ATT (≤ 19), the shift (≤ 18) and
+    the LASE (≤ 19). Before, only riesznet was capped. The alternative,
+    c = 0.05 for every block, was not chosen; at 500 replicates it never
+    made ψ̂ resolved worse and would also remove riesznet's TSM blow-ups
+    (gap 1).
 
 ## 3. Tables and figures
 
@@ -230,7 +241,7 @@ Methods go in adjacent rows, since that is the comparison the reader makes.
 - **Table 5 (KL vs squared).** Serves claim 3. Rows: DGP × n. Columns: α̂'s
   RMSE for each loss and the paired z; ψ̂'s RMSE for each loss; the share of
   non-positive weights.
-- **Appendix table (the 5 appendix DGPs, 200 replicates).** Serves claims
+- **Appendix table (the 5 appendix DGPs).** Serves claims
   1 and 2. For the ATE and the ATT: each method's coverage and RMSE ratio
   to the reference plug-in, bold where resolved worse; and α̂'s RMSE by
   learner as in Table 4. The main text says what it shows, failures
@@ -248,134 +259,109 @@ Methods go in adjacent rows, since that is the comparison the reader makes.
   α̂ alone; the paper then has to justify it some other way or drop it.
 - Claim 3: KL resolved worse than squared on α̂ anywhere.
 
-**Where the evidence stands (`final_split`, sample splitting, first 200
-of 500 replicates, 2026-10-23).** 67,400 tasks, 0 errors; the pairing
-check against `pilot_cv5` passes (125 replicate cells, none differ). Coverage
-has a Monte Carlo SE of about 0.015, so a cell below 0.92 is more than 2 SEs
-under 0.95. Numbers will move at 500. The ranges below are over all 13 ATE/ATT DGPs;
-the main text will use the 8 core ones (`paper_tables.py`, CORE). The 50-replicate `pilot_cf5` evidence
-(cross-fitting) is in this file's git history (commit 6b655b5).
+**Where the evidence stands (`final_split`, sample splitting, 500
+replicates, 2026-10-28).** 168,500 tasks, 0 errors; the pairing check
+against `pilot_cv5` passes (125 replicate cells, none differ). Coverage has a
+Monte Carlo SE of about 0.010, so a cell at 0.92 or below is resolved under
+0.95. Learners are reported capped at the reference plug-in's level (section
+2). Ranges are over the 7 core ATE/ATT DGPs other than γ = 3 unless stated.
+The 200-replicate evidence and the `pilot_cf5` evidence are in this file's
+git history.
 - **Claim 1, ATE.**
-  - **Coverage.** With good overlap (γ ≤ 1) and in the non-ladder DGPs,
-    the Riesz learners cover 0.90–0.98. The exception is augforestriesz on
-    `sparse50`, at 0.875. At moderate overlap, γ = 2, coverage is already
-    down: rieszboost and augforestriesz 0.855, riesztree 0.870, riesznet
-    0.890, forestriesz 0.900, while krrr (≥ 0.92) and the reference
-    plug-in (≥ 0.91) hold. At γ = 3: riesztree 0.795, augforestriesz 0.800,
-    rieszboost 0.825, forestriesz 0.850, the plug-in 0.885 and the oracle
-    0.92. **So the boundary starts at γ = 2, not γ = 3**, and part 1 of
-    the claim ("good or moderate overlap") holds only for krrr. The claim
-    should narrow to good overlap.
-  - **Accuracy.** krrr and forestriesz are never resolved worse than the
-    reference plug-in (RMSE ratio 0.88–1.04 and 0.96–1.32). rieszboost is
-    0.90–1.21, resolved worse once (`sparse50`, 1.12). Capped riesznet is
-    0.97–1.31, never resolved worse. riesztree is resolved worse on 3 DGPs
-    (`tail_feature` 1.18, `step` 1.12, `sparse50` 1.15) and augforestriesz
-    on 5 (`tail_feature` 1.16, `logistic` 1.10, `step` 1.17, `sparse50`
-    1.28, `additive` 1.09). Only augforestriesz on `sparse50` is above the
-    proposed 1.25 threshold.
-  - **Rate.** In the TSM block, RMSE × √n is flat or falling from n = 250
-    to 4000 for the plug-in, rieszboost (both losses), krrr and
-    forestriesz, with coverage 0.91–0.98. riesznet capped at |α̂| ≤ 100 is
-    not: on `additive_g2` its RMSE × √n goes 4.9, 7.8, 3.6, from three
-    blow-up replicates at n = 1000 (errors 1.9, 1.4, 1.2 against at most
-    0.35 for the plug-in). Capped at |α̂| ≤ 20 (c = 0.05) they go away
-    (ratio to the plug-in 0.57, 1.00, 0.96).
+  - **Coverage.** With good overlap (γ ≤ 1) and in `logistic`,
+    `interaction` and `steps10`, the Riesz learners cover 0.92–0.96. On
+    `sparse50` rieszboost covers 0.910, riesznet 0.912 and augforestriesz
+    0.900. At γ = 2 every learner is resolved below 0.95: rieszboost 0.844,
+    augforestriesz 0.836, riesztree 0.866, riesznet and forestriesz 0.892,
+    krrr 0.908; the reference plug-in is 0.920 and the oracle 0.954. At
+    γ = 3: riesztree 0.810, augforestriesz 0.842, rieszboost 0.846,
+    forestriesz 0.890, krrr 0.922, riesznet 0.930, the plug-in 0.926. The
+    boundary starts at γ = 2.
+  - **Accuracy.** Every learner's RMSE is 0.93–1.23 times the reference
+    plug-in's. Resolved worse: augforestriesz on `overlap_g1` (1.07),
+    `logistic` (1.07), `sparse50` (1.23), `interaction` (1.04); rieszboost
+    (1.08) and riesztree (1.12) on `sparse50`. None is resolved above 1.25.
+    Resolved better: forestriesz at γ = 3 (0.73), rieszboost on
+    `overlap_g05`, `interaction` and `steps10`, krrr and forestriesz on
+    `steps10`.
+  - **Rate (TSM).** RMSE × √n is flat or falling from n = 250 to 4000 for
+    the plug-in, rieszboost with both losses, krrr and forestriesz, with
+    coverage 0.92–0.96. riesznet is not, on `additive_g2`: 6.12, 6.55,
+    3.76, from blow-ups its cap at 100 leaves (gap 1).
 - **Claims 1 and 4, the other estimands.**
-  - **ATT.** Coverage 0.87–0.97 in the 12 DGPs other than γ = 3, the
-    lowest at γ = 2 (rieszboost 0.870, augforestriesz 0.875) and on
-    `additive` (riesztree 0.890, riesznet 0.895). rieszboost's RMSE ratio
-    reaches 2.42 on `overlap_g1` from one replicate (error 3.33; the next
-    largest is 0.35). Capped at |α̂| ≤ 19, like the reference plug-in, that
-    replicate's error is 0.53 and the ratio 1.01. Resolved worse than the
-    reference: rieszboost on `sparse50` (1.27), forestriesz on
-    `tail_feature` (1.23), riesztree on `step` (1.23), augforestriesz on
-    `tail_feature`, `bulk_feature`, `step` (1.18–1.27).
-  - **Additive shift.** Every learner covers 0.92–0.96, including
-    rieszboost (0.84 on `shift_bimodal` in the pilot). krrr's RMSE is
-    0.80–1.00 times the classification plug-in's and capped riesznet's
-    0.96–1.68. rieszboost's is 0.92–2.43, the large values (`shift_gauss`
-    1.98, `shift_bimodal` 2.43) from a few replicates and unresolved (z 1.6,
-    2.6). Capped at c = 0.01 (|α̂| ≤ 98) it is 1.61 and 1.83; at c = 0.05
-    (|α̂| ≤ 18), 1.06 and 0.80.
-  - **LASE.** Coverage 0.90–0.96, RMSE 0.93–1.18 times the plug-in's,
-    nothing resolved worse.
+  - **ATT.** Coverage 0.87–0.96; at γ = 2 every learner covers 0.870–0.898
+    (plug-in 0.932). RMSE 0.90–1.15 times the plug-in clipped at 0.05,
+    rieszboost resolved worse on `sparse50` (1.12). The cap at 0.05 removes
+    rieszboost's `overlap_g1` blow-up (1.78 as fitted, 1.03 capped).
+  - **Additive shift.** Coverage 0.91–0.96; RMSE 0.77–1.14 times the
+    classification plug-in's; riesznet resolved worse on `shift_hetero`
+    (1.14). Capped at 0.05, rieszboost is 0.83–1.08 (3.55 on `shift_gauss`
+    as fitted). Every learner is resolved better on `shift_skew`, and krrr
+    and rieszboost on `shift_bimodal`.
+  - **LASE.** Coverage 0.89–0.95, krrr lowest (0.894–0.914: resolved below
+    0.95 on `shift_skew`, z about −2.9 on the others) and riesznet
+    0.908–0.926. RMSE 0.95–1.11;
+    riesznet resolved worse on `shift_bimodal` (1.11).
 - **Claim 2, learners (α̂ RMSE; Table 4).**
-  - **ATE:** krrr resolved best on `overlap_g05`, `overlap_g1` and
-    `interaction` (z −7.8 to −10.4); forestriesz on `overlap_g2`,
-    `overlap_g3`, `smooth`, `sparse50` and `additive` (z −3.9 to −18);
-    rieszboost on `steps10` (z −7.2, 2.6% ahead of forestriesz). krrr on
-    `logistic` is best but unresolved (z −2.4).
-  - **ATT:** forestriesz resolved best on `smooth`, `sparse50`, `additive`
-    and `steps10`; krrr on `interaction`. krrr leads at γ = 1 and 2 and
-    forestriesz at γ = 3, unresolved (z −2.4 to −2.7).
-  - **Additive shift:** krrr resolved best on `shift_gauss`, riesznet on
-    `shift_skew`. **LASE:** rieszboost on three of four DGPs (z −6.3 to
-    −29).
-  - **Never resolved best:** riesztree and augforestriesz. augforestriesz
-    is the unresolved best on `tail_feature` and `bulk_feature` (ATE and
-    ATT) and `step` (ATT), by 2–4% (|z| ≤ 1.9).
-  - **Why the differences shrink in ψ̂.** In the 12 ATE DGPs, the α̂ part
-    of ψ̂'s error is 0.32–0.86 times the shared part, so a 10–68% spread in
-    α̂'s RMSE becomes a 5–49% spread in ψ̂'s. In the additive shift the
-    ratio is 0.40–1.37 and ψ̂'s RMSE spreads up to 3.0 times.
-- **Claim 3, losses.** KL's α̂ RMSE is 13–23% below the squared loss's on
-  `additive` and `additive_g2` at n = 1000 and 4000 (z −12 to −42), and the
-  gap grows with n. The two tie at n = 250. **On `interaction`, KL is
-  resolved worse at n = 1000** (3.6%, z = +5.4) and slightly worse,
-  unresolved, at n = 4000 (z = +1.9). This is the result section 3 said
-  would change the claim: it now needs "and slightly worse when the logit
-  has interactions". On ψ̂ the losses tie everywhere (|z| ≤ 2.6).
+  - **ATE:** krrr resolved best on `overlap_g05`, `overlap_g1`, `logistic`
+    and `interaction` (z −5.1 to −19.5); forestriesz on `overlap_g2`,
+    `overlap_g3` and `sparse50` (z −4.5 to −24.9); rieszboost on `steps10`
+    (z −11.7, 2.6% ahead of forestriesz).
+  - **ATT:** krrr on `overlap_g1`, `overlap_g2`, `logistic`, `interaction`;
+    forestriesz on `overlap_g3`, `sparse50`, `steps10`. `overlap_g05` ties.
+  - **Additive shift:** krrr on `shift_gauss`, riesznet on `shift_skew`;
+    `shift_hetero` and `shift_bimodal` unresolved. The classification
+    plug-in's α̂ is worse than krrr's in all four (krrr 0.57–0.84 times).
+  - **LASE:** rieszboost on `shift_gauss`, `shift_hetero`, `shift_skew` (z
+    −17 to −52); the classification plug-in's α̂ beats it (0.59–0.99
+    times), because the plug-in applies the LASE's indicators exactly.
+  - **Never resolved best:** riesztree and augforestriesz, in any DGP,
+    core or appendix. augforestriesz still leads, unresolved, on the ATE's
+    `tail_feature` and `bulk_feature` (3–5%, z −2.9 and −2.6); on the ATT,
+    capped at 0.05, those DGPs become resolved forestriesz wins (16–21%).
+  - **Why the differences shrink in ψ̂.** In the 7 core ATE DGPs the α̂
+    part of ψ̂'s error is 0.31–0.86 times the shared part, so a 19–69%
+    spread in α̂'s RMSE becomes an 8–23% spread in ψ̂'s. In the additive
+    shift the ratio is 0.38–0.82 and the ψ̂ spread up to 1.33 times (it
+    was 3.0 before rieszboost was capped).
+- **Claim 3, losses.** KL's α̂ RMSE is 12–23% below the squared loss's with
+  additive log-odds at n = 1000 and 4000 (z −14 to −42), and the gap grows
+  with n; they tie at n = 250. With interactions, KL is resolved worse at
+  n = 1000 (3%, z = +6.6) and ties at n = 250 and 4000. On ψ̂ nothing is
+  resolved except `interaction` at n = 4000, where KL is 2% worse
+  (z = +3.9). The squared loss gives a non-positive weight to up to 1.9%
+  of treated units (`additive_g2`, rising with n: 0.96%, 1.28%, 1.94%);
+  KL never does.
 
 **Gaps.**
-1. **Caps, for every learner, not only riesznet.** A single replicate in
-   which |α̂| drifts can dominate an RMSE over 200 replicates, and more
-   replicates do not fix that. In the final run it happens to rieszboost
-   (ATT `overlap_g1`; shift `shift_gauss`, `shift_bimodal`) and to riesznet
-   capped at 100 (TSM `additive_g2`), besides riesznet uncapped. Capping at
-   the reference plug-in's level (c = 0.05 for the ATT) removes each case.
-   Proposed rule, for the user to decide: report every Riesz learner capped
-   at the clipping level of the reference plug-in it is compared with
-   (c = 0.01 for the ATE and TSM, 0.05 for the ATT), and pick one level for
-   the shift and the LASE, whose reference is unclipped.
-2. **Coverage at γ = 2.** Claim 1 promised coverage near 0.95 with good or
-   moderate overlap. At γ = 2 four of six learners are resolved below
-   (0.855–0.890). Either narrow to γ ≤ 1 or report γ = 2 as the start of
-   the boundary.
-3. **KL is worse on `interaction`** (claim 3, above).
-4. **riesztree and augforestriesz never win, and are resolved worse than
-   the plug-in in 3–5 ATE DGPs.** augforestriesz's 2–4% leads on
-   `tail_feature`, `bulk_feature` and `step` are its only candidate wins;
-   at |z| ≤ 1.9 they cannot be sized from 200 replicates, and those DGPs
-   stay at 200 in the appendix, so they will not be tested. In the core
-   DGPs augforestriesz is resolved worse than the plug-in on `logistic`
-   and `sparse50`, riesztree on `sparse50`. Since the
-   package recommends augforestriesz, the paper should say why or show
-   forestriesz as the package's forest.
+1. **riesznet's TSM blow-ups under the matched cap.** At |α̂| ≤ 100 riesznet
+   is 1.87 times the plug-in on `additive_g2` at n = 1000 (resolved) and
+   its RMSE × √n does not fall; capped at 20 it would tie the plug-in. The
+   paper states this as a riesznet limitation. (ATT and shift blow-ups are
+   gone under the matched cap.)
+2. **Coverage at γ = 2 and on the LASE.** Every learner covers resolved
+   below 0.95 at γ = 2 (ATE 0.84–0.91, ATT 0.87–0.90), and krrr on all four
+   LASE DGPs (0.89–0.91). Claim 1's coverage part is stated for good
+   overlap only; the LASE shortfall is reported.
+3. **KL is slightly worse with interactions** (claim 3, above).
+4. **riesztree and augforestriesz never win, and augforestriesz is
+   resolved worse than the plug-in in 4 of 8 core ATE DGPs** (by 4–23%).
+   Since the package recommends augforestriesz, the paper should say why
+   or show forestriesz as the package's forest.
 5. **The classification plug-in has the best α̂ on the LASE.** The edge is
    structural: the LASE's representer, 1(a < t + δ) r − 1(a < t), jumps at
-   a = t and a = t + δ; the plug-in applies those indicators exactly, while
-   a Riesz learner must learn the jumps. ψ̂ ties. A structured Riesz
+   a = t and a = t + δ; the plug-in applies those indicators exactly,
+   while a Riesz learner must learn the jumps. ψ̂ ties. A structured Riesz
    estimate built from an additive-shift fit, 1(a < t + δ)(α̂_shift + 1) −
    1(a < t), would apply them too; it was not tried.
-6. **Replicates.** The user set 500 as the minimum. Sizing from these 200
-   (n_sim for |z| = 3 is (3 sd(d) / mean(d))², d the per-replicate
-   difference):
-   - coverage gaps of 0.045 or more from 0.95 resolve by about 380
-     replicates, and at 500 coverage has a Monte Carlo SE of 0.010;
-   - unresolved best-vs-runner-up α̂ contrasts that 500 should resolve:
-     ATE `logistic` (krrr, about 300), ATT γ = 1, 2, 3 (250–330),
-     `shift_bimodal` (krrr, about 220);
-   - ones 500 will not resolve: `shift_hetero` (about 820), and
-     augforestriesz's leads (530 to 3,000, and too noisy to size; their
-     DGPs stay at 200 in the appendix);
-   - claim 3: KL vs squared on `interaction`, n = 4000, about 500;
-   - RMSE-ratio contrasts driven by blow-ups (gap 1) are heavy-tailed, so
-     extra replicates help them little; the cap does.
-   More than 500 would buy only near-ties that no claim depends on.
-   Decision (2026-10-23): extend the 8 core ATE/ATT DGPs and the TSM,
-   shift and LASE blocks to 500 (`savio_final.sh`, about 1,300
-   core-hours); the 5 appendix DGPs stay at 200.
+6. **Replicates.** 500, set by the user as a minimum and checked from the
+   first 200 replicates with n_sim = (3 sd(d) / mean(d))², d the
+   per-replicate difference. At 500 the contrasts the claims rest on are
+   resolved; in the core and shift DGPs the unresolved ones are
+   best-vs-runner-up α̂ differences of 0.5–3% (`shift_hetero`,
+   `shift_bimodal`, LASE `shift_bimodal`, ATT `overlap_g05`), which need
+   thousands of replicates. Decision (2026-10-23):
+   no more than 500.
 
 ## 4. DGPs and settings
 

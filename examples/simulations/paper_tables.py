@@ -6,7 +6,8 @@ summarized run (its rows.csv and psi.csv, written by `pilot.py summarize`).
 RUN is a folder under results/ (default final_split, the final run; pilot_cf5
 for the 50-replicate pilot). The main-text tables use the eight core ATE and
 ATT DGPs (CORE); tab_appendix.tex and tab_appendix_alpha.tex hold the five
-others (APPENDIX), which have 200 replicates in the final run. Run from examples/simulations,
+others (APPENDIX). Every Riesz learner is reported capped at its block's
+reference plug-in's clipping level (CAP, as pilot.py's headline). Run from examples/simulations,
 with a Python that has matplotlib (the project venv does not; Anaconda's does).
 The prose numbers in the paper are not regenerated: check them by hand."""
 import sys
@@ -32,17 +33,19 @@ APPENDIX = ["tail_feature", "bulk_feature", "smooth", "step", "additive"]
 ATE = CORE + APPENDIX
 SHIFT = ["shift_gauss", "shift_hetero", "shift_skew", "shift_bimodal"]
 NOT_WEAK = [g for g in CORE if g != "overlap_g3"]
-REF = {"ate": "plugin_xgb_clip01", "att": "plugin_xgb_clip05", "shift": "plugin_classif", "localshift": "plugin_classif"}
-RN = {"ate": "riesznet_clip01", "att": "riesznet_clip05", "shift": "riesznet_clip01", "localshift": "riesznet_clip01",
-      "tsm": "riesznet_clip01"}
+REF = {"ate": "plugin_xgb_clip01", "att": "plugin_xgb_clip05", "shift": "plugin_classif", "localshift": "plugin_classif",
+       "tsm": "plugin_xgb_clip01"}
+CAP = {"ate": "01", "tsm": "01", "att": "05", "shift": "05", "localshift": "05"}
 LEARNERS = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "forestriesz"]
-NAME = {"rieszboost": "rieszboost", "riesznet": "riesznet (capped)", "krrr": "krrr", "riesztree": "riesztree",
+NAME = {"rieszboost": "rieszboost", "riesznet": "riesznet", "krrr": "krrr", "riesztree": "riesztree",
         "augforestriesz": "augforestriesz", "forestriesz": "forestriesz", "oracle": "oracle",
         "ref": "reference plug-in", "plugin_logit": "logistic plug-in", "rieszboost_kl": "rieszboost, KL loss"}
 
 
 def variant(blk, m):
-    return {"ref": REF[blk], "riesznet": RN[blk]}.get(m, m)
+    if m == "ref":
+        return REF[blk]
+    return f"{m}_clip{CAP[blk]}" if m in LEARNERS + ["rieszboost_kl"] else m
 
 
 def zpair(x, a, b):
@@ -86,7 +89,7 @@ for g in ["additive", "additive_g2", "interaction"]:
     for n in [250, 1000, 4000]:
         c = s[(s.dgp == g) & (s.n == n)]
         cells = []
-        for v in ["oracle", "plugin_xgb_clip01", "rieszboost", "rieszboost_kl", RN["tsm"], "krrr", "forestriesz"]:
+        for v in ["oracle", REF["tsm"]] + [variant("tsm", m) for m in ["rieszboost", "rieszboost_kl", "riesznet", "krrr", "forestriesz"]]:
             x = c[c.variant == v]
             cells.append(f"{np.sqrt(x.sqerr.mean()) * np.sqrt(n):.2f} ({x.cover.mean():.2f})")
         lines.append((rf"\texttt{{{g.replace('_', chr(92) + '_')}}}" if n == 250 else "") + f" & {n} & " + " & ".join(cells) + r" \\")
@@ -184,9 +187,10 @@ for g in ["additive", "additive_g2", "interaction"]:
     for n in [250, 1000, 4000]:
         a = r[(r.block == "tsm") & (r.dgp == g) & (r.n == n)].pivot_table(index="rep", columns="variant", values="rmse")
         q = p[(p.block == "tsm") & (p.dgp == g) & (p.n == n)].pivot_table(index="rep", columns="variant", values="sqerr")
+        sq, kl = variant("tsm", "rieszboost"), variant("tsm", "rieszboost_kl")
         lines.append((rf"\texttt{{{g.replace('_', chr(92) + '_')}}}" if n == 250 else "") +
-                     f" & {n} & {a.rieszboost.mean():.3f} & {a.rieszboost_kl.mean():.3f} & {zpair(a, 'rieszboost_kl', 'rieszboost'):+.1f}"
-                     f" & {np.sqrt(q.rieszboost.mean()):.3f} & {np.sqrt(q.rieszboost_kl.mean()):.3f} & {zpair(q, 'rieszboost_kl', 'rieszboost'):+.1f} \\\\")
+                     f" & {n} & {a[sq].mean():.3f} & {a[kl].mean():.3f} & {zpair(a, kl, sq):+.1f}"
+                     f" & {np.sqrt(q[sq].mean()):.3f} & {np.sqrt(q[kl].mean()):.3f} & {zpair(q, kl, sq):+.1f} \\\\")
     lines.append(r"\addlinespace")
 (OUT / "tab_kl.tex").write_text("\n".join(lines[:-1]) + "\n")
 
@@ -231,4 +235,4 @@ print("g3 coverage:", cov.loc["overlap_g3"].round(2).to_dict())
 print("g3 ratio:", {v: round(np.sqrt(w.loc["overlap_g3"][v].mean() / w.loc["overlap_g3"]["plugin_xgb_clip01"].mean()), 2) for v in ["oracle"] + [variant("ate", m) for m in LEARNERS]})
 for blk in ["att"]:
     c = p[(p.block == blk) & (p.dgp == "overlap_g3")].groupby("variant").cover.mean()
-    print("ATT g3 coverage:", c[[REF[blk], RN[blk]] + LEARNERS[2:] + ["rieszboost"]].round(2).to_dict())
+    print("ATT g3 coverage:", c[[REF[blk]] + [variant(blk, m) for m in LEARNERS]].round(2).to_dict())

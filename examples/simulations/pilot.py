@@ -719,22 +719,24 @@ def paired(df, a, b, col="rmse"):
 RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "forestriesz"]
 
 
-def headline(m, block=None):
-    """The variant a learner is reported by. riesznet's |alpha-hat| is capped
-    at 1/0.01, the bound of the reference plug-in (clipped at 0.01): uncapped,
-    the few replicates where it drifts dominate every mean (AIMS.md section 6).
-    For the ATT the cap is 1/0.05 (19), against the plug-in clipped at 0.05:
-    there alpha-hat(0, x) drifts where controls are scarce (pi near 1), only
-    treated rows push it and only control rows hold it back, and the cap at
-    1/0.01 left 1-2 blow-ups per DGP (pilot_cf5, 2026-10-22). The other Riesz
-    learners barely change under the cap, so they are reported as fitted."""
-    if m != "riesznet":
-        return m
-    return "riesznet_clip05" if block == "att" else "riesznet_clip01"
+# The cap each Riesz learner is reported with: the clipping level of the
+# block's reference plug-in (the XGBoost propensity clipped at 0.01 for the
+# ATE and TSM, at 0.05 for the ATT; 0.05 for the shift and the LASE).
+CAP = {"ate": "01", "tsm": "01", "tsm_align": "01", "att": "05", "shift": "05", "localshift": "05"}
+
+
+def headline(m, block):
+    """The variant a Riesz learner is reported by: its |alpha-hat| capped at
+    the bound of the block's reference plug-in (CAP). Uncapped, the few
+    replicates where alpha-hat drifts dominate every mean: riesznet in most
+    blocks (AIMS.md section 6), rieszboost on the ATT and the shift (final_split,
+    2026-10-28). The user chose this rule on 2026-10-28; before, only riesznet
+    was capped. Other methods are returned as they are."""
+    return f"{m}_clip{CAP[block]}" if m in RIESZ else m
 
 
 CONTRASTS = list(dict.fromkeys(
-    [("ate", headline(m), "plugin_xgb_clip01") for m in RIESZ_ATE]
+    [("ate", headline(m, "ate"), "plugin_xgb_clip01") for m in RIESZ_ATE]
     + [("ate", "plugin_logit", "plugin_xgb_clip01")]
     # Clipping alpha-hat, against the same learner unclipped and against the
     # plug-in clipped to the same bounds.
@@ -743,16 +745,16 @@ CONTRASTS = list(dict.fromkeys(
        for m in ms for c in ("01", "05") for ref in (m, f"plugin_xgb_clip{c}")]
     + [("shift", f"{m}_clip{c}", ref) for m in ("rieszboost", "riesznet", "krrr") for c in ("01", "05")
        for ref in (m, f"plugin_classif_clip{c}")]
-    + [("tsm", headline(m), "plugin_xgb_clip01") for m in ("riesznet", "krrr", "forestriesz")]
+    + [("tsm", headline(m, "tsm"), "plugin_xgb_clip01") for m in ("riesznet", "krrr", "forestriesz")]
     + [(b, a, ref) for b in ("tsm", "tsm_align")
        for a, ref in [("rieszboost_kl", "rieszboost"), ("rieszboost_kl", "plugin_xgb_clip01"),
                       ("rieszboost", "plugin_xgb_clip01")]]
-    + [("shift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
+    + [("shift", headline(m, "shift"), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
     # The ratio estimands, against the same references as the ATE and the shift.
     + [("att", headline(m, "att"), "plugin_xgb_clip05") for m in RIESZ_ATE]
     + [("att", "plugin_logit", "plugin_xgb_clip05")]
-    + [("localshift", headline(m), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
+    + [("localshift", headline(m, "localshift"), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
 ))
 
