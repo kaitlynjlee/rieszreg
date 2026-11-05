@@ -49,6 +49,14 @@ ForestRiesz of Chernozhukov et al. (2022). Results up to 2026-10-21 also had
 a plug-in tuned on the Riesz loss (plugin_xgb_rl); its result files are
 still on disk but no block lists it, so the summary ignores them.
 
+Every block also has classif_aug, the generic classification method
+(fit_classif_aug): one XGBoost classifier on the package's augmented rows
+separates observed points from positive- and negative-weight generated
+points, and alpha-hat = (p+ - p-) / p0. It needs nothing estimand-specific,
+so it is the comparator for "a generic density-ratio estimate of alpha0",
+next to each block's estimand-specific plug-in. It gets the same capped
+variants as the Riesz learners, and is reported capped.
+
 Every Riesz learner also gets clipped variants, <method>_clip01 and
 <method>_clip05: |alpha-hat| capped at the largest |alpha-hat| a plug-in
 can reach when its probability is clipped to [c, 1 - c], 1 / c for a binary
@@ -128,30 +136,30 @@ BLOCKS = {
               "steps10", "hard_unshared_1", "mix33_1", "mix67_1", "hard_shared_1",
               "hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
         methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree",
-                 "augforestriesz", "forestriesz"]),
+                 "augforestriesz", "forestriesz", "classif_aug"]),
     "tsm": dict(
         estimand="TSM", ns=[250, 1000, 4000],
         dgps=["additive", "additive_g2", "interaction"],
-        methods=["plugin_xgb", "rieszboost", "rieszboost_kl", "riesznet", "krrr", "forestriesz"]),
+        methods=["plugin_xgb", "rieszboost", "rieszboost_kl", "riesznet", "krrr", "forestriesz", "classif_aug"]),
     "tsm_align": dict(
         estimand="TSM", ns=[1000],
         dgps=["hard_unshared_2", "mix33_2", "mix67_2", "hard_shared_2"],
-        methods=["plugin_xgb", "rieszboost", "rieszboost_kl"]),
+        methods=["plugin_xgb", "rieszboost", "rieszboost_kl", "classif_aug"]),
     "shift": dict(
         estimand="SHIFT", ns=[1000],
         dgps=list(D.SHIFT),
-        methods=["plugin_classif", "rieszboost", "riesznet", "krrr"]),
+        methods=["plugin_classif", "rieszboost", "riesznet", "krrr", "classif_aug"]),
     "att": dict(
         estimand="ATT", ns=[1000],
         dgps=["overlap_g05", "overlap_g1", "overlap_g2", "overlap_g3", "tail_feature",
               "bulk_feature", "logistic", "smooth", "step", "sparse50", "additive", "interaction",
               "steps10"],
         methods=["plugin_xgb", "plugin_logit", "rieszboost", "riesznet", "krrr", "riesztree",
-                 "augforestriesz", "forestriesz"]),
+                 "augforestriesz", "forestriesz", "classif_aug"]),
     "localshift": dict(
         estimand="LOCALSHIFT", ns=[1000],
         dgps=list(D.SHIFT),
-        methods=["plugin_classif", "rieszboost", "riesznet", "krrr"]),
+        methods=["plugin_classif", "rieszboost", "riesznet", "krrr", "classif_aug"]),
 }
 # Estimands with a continuous exposure: alpha-hat is evaluated at the observed
 # (A, X), not as the pair (alpha-hat(1, x), alpha-hat(0, x)).
@@ -508,6 +516,95 @@ def fit_plugin_classif(method, estimand, train, folds, covs, tuned=None):
     return predict, best, scores, tuned
 
 
+def _classif_aug_pools(estimand, df, covs):
+    """The three pools of the generic classification method, from the
+    package's own augmentation of df (so any finite-evaluation estimand works
+    unchanged). est.augment emits, per unit, the observed point W_i
+    (is_original = 1) and each generated point a_j(O_i) with coefficient
+    c_j(O_i) = -potential_deriv_coef; a generated point equal to W_i shares its
+    row, and duplicate points within a unit have their coefficients summed.
+    Each augmented row becomes up to two classifier rows:
+      class 0, weight 1         if it is the observed point;
+      class 1, weight c         if c > 0  (the positive pool, density q+);
+      class 2, weight |c|       if c < 0  (the negative pool, density q-).
+    Returns (features, label, weight, unit index)."""
+    aug = _estimand(estimand, covs).augment(df[["A"] + covs].to_numpy())
+    c = -aug.potential_deriv_coef
+    parts = [(aug.is_original > 0, 0, np.ones(len(c))), (c > 0, 1, c), (c < 0, 2, -c)]
+    F = np.vstack([aug.features[m] for m, _, _ in parts])
+    y = np.concatenate([np.full(m.sum(), k) for m, k, _ in parts])
+    w = np.concatenate([wt[m] for m, _, wt in parts])
+    unit = np.concatenate([aug.origin_index[m] for m, _, _ in parts])
+    return pd.DataFrame(F, columns=["A"] + covs), y, w, unit
+
+
+def fit_classif_aug(method, estimand, train, folds, covs, tuned=None):
+    """The generic classification method: alpha0 = dQ/dP_W, with Q(B) =
+    E[sum_j c_j(O) 1{a_j(O) in B}], estimated as a ratio of class
+    probabilities. One XGBoost classifier separates the observed points
+    (class 0) from the generated points with positive weights (class 1) and
+    with negative weights (class 2), each generated row carrying sample
+    weight |c_j(O_i)| (_classif_aug_pools). The weights are raw, not
+    balanced: each pool's total weight is then n Q+(W), n Q-(W) and n, so
+    the Bayes posteriors are proportional to q+, q- and p_W and
+
+        alpha-hat = (p1 - p2) / p0
+
+    with no prior correction. An estimand whose weights are all positive
+    (the TSM) has no class 2, and the classifier is binary.
+
+    Nothing is estimand-specific: the same code covers the ATE, ATT, TSM,
+    shift and LASE through est.augment. In particular, an identity term
+    (a_j(o) = w, as -alpha(A, X) in the shift) is not subtracted analytically:
+    its pool has the law of W, and the classifier has to learn p2 = p0.
+
+    Tuning is the plug-ins': the XGBoost grid, 5-fold CV with early stopping
+    on the held-out fold, scored by held-out weighted log loss, and a refit
+    on all units with the mean stopping iteration. The folds are by unit, so
+    a unit's observed and generated rows fall in the same fold. The variants
+    cap |alpha-hat| exactly as for the Riesz learners (_clip_alpha)."""
+    import xgboost as xgb
+    from sklearn.metrics import log_loss
+    cols = ["A"] + covs
+    X, y, w, unit = _classif_aug_pools(estimand, train, covs)
+    classes = np.unique(y)              # [0, 1, 2], or [0, 1] when no weight is negative
+    yk = np.searchsorted(classes, y)    # XGBoost wants labels 0..K-1
+
+    def make(**kw):
+        return xgb.XGBClassifier(n_jobs=1, random_state=SEED, **kw)
+
+    if tuned is None:
+        f_unit = folds[unit]
+
+        def fit_score(s, k):
+            f, h = f_unit != k, f_unit == k
+            m = make(n_estimators=2000, early_stopping_rounds=20, **s)
+            m.fit(X[f], yk[f], sample_weight=w[f], eval_set=[(X[h], yk[h])],
+                  sample_weight_eval_set=[w[h]], verbose=False)
+            score = -log_loss(yk[h], m.predict_proba(X[h]), sample_weight=w[h], labels=np.arange(len(classes)))
+            return score, m.best_iteration + 1
+        best, scores, iters = _tune(GRIDS["xgb"], fit_score)
+        tuned = (best, int(round(np.mean(iters))))
+    else:
+        scores = None
+    best, n_trees = tuned
+    m = make(n_estimators=n_trees, **best).fit(X, yk, sample_weight=w)
+
+    def alpha_at(Z):
+        p = m.predict_proba(Z[cols])
+        num = p[:, 1] - (p[:, 2] if len(classes) == 3 else 0.0)
+        return num / np.clip(p[:, 0], 1e-12, None)
+
+    def predict(df):
+        Z = df[cols]
+        alpha = alpha_at(Z) if estimand in CONTINUOUS else (alpha_at(Z.assign(A=1.0)), alpha_at(Z.assign(A=0.0)))
+        out = {method: alpha}
+        for c in CLIPS:
+            out[f"{method}_clip{str(c)[2:]}"] = _clip_alpha(estimand, alpha, c)
+        return out
+    return predict, best, scores, tuned
+
+
 def fit_outcome(estimand, train, folds, covs, tuned=None):
     """The outcome regression mu-hat(a, x), shared by every alpha-hat in a
     replicate: XGBoost on (A, X), tuned by held-out squared error. Returns
@@ -619,7 +716,7 @@ def run_task(block, dgp_name, n, rep, method, refit=False):
             path.write_text(json.dumps(rec))
             return path, False, rec["seconds"]
         test, alpha0, weak, pi = test_data(dgp_name, estimand)
-        fit = (fit_riesz if method in RIESZ else
+        fit = (fit_riesz if method in RIESZ else fit_classif_aug if method == "classif_aug" else
                fit_plugin_classif if method == "plugin_classif" else fit_plugin_binary)
         # A refit (--refit) reuses the setting a finished task chose.
         predict, best, scores, tuned = fit(method, estimand, train, folds, covs, old["best"] if old else None)
@@ -633,9 +730,9 @@ def run_task(block, dgp_name, n, rep, method, refit=False):
         rows = [{"variant": v, **r} for v, r in
                 _alpha_rows(predict(test), dgp_name, estimand, test, covs, alpha0, weak, pi).items()]
         rec = {"block": block, "dgp": dgp_name, "n": n, "rep": rep, "method": method, "rows": rows,
-               "best": best, "grid": GRIDS["xgb"] if method.startswith("plugin_") else GRIDS[method],
+               "best": best, "grid": GRIDS["xgb"] if method.startswith("plugin_") or method == "classif_aug" else GRIDS[method],
                "scores": scores, "seconds": time.time() - t0}
-        if not old and isinstance(tuned, tuple):  # an XGBoost plug-in: (setting, number of trees)
+        if not old and isinstance(tuned, tuple):  # an XGBoost plug-in or classif_aug: (setting, number of trees)
             rec["n_trees"] = tuned[1]
         if old:
             rec.update(grid=old["grid"], seconds=old["seconds"], refit_seconds=time.time() - t0,
@@ -652,7 +749,7 @@ def run_task(block, dgp_name, n, rep, method, refit=False):
 
 
 # Rough relative cost, so the slowest tasks start first.
-COST = {"riesznet": 10, "rieszboost": 6, "rieszboost_kl": 6, "augforestriesz": 3, "forestriesz": 3, "krrr": 3, "outcome": 2}
+COST = {"classif_aug": 3, "riesznet": 10, "rieszboost": 6, "rieszboost_kl": 6, "augforestriesz": 3, "forestriesz": 3, "krrr": 3, "outcome": 2}
 
 
 def cmd_run(args):
@@ -722,6 +819,9 @@ RIESZ_ATE = ["rieszboost", "riesznet", "krrr", "riesztree", "augforestriesz", "f
 # The cap each Riesz learner is reported with: the clipping level of the
 # block's reference plug-in (the XGBoost propensity clipped at 0.01 for the
 # ATE and TSM, at 0.05 for the ATT; 0.05 for the shift and the LASE).
+# classif_aug's alpha-hat is a ratio of probabilities with no clip of its
+# own, so it is capped the same way (CAPPED).
+CAPPED = (*RIESZ, "classif_aug")
 CAP = {"ate": "01", "tsm": "01", "tsm_align": "01", "att": "05", "shift": "05", "localshift": "05"}
 
 
@@ -731,8 +831,9 @@ def headline(m, block):
     replicates where alpha-hat drifts dominate every mean: riesznet in most
     blocks (AIMS.md section 6), rieszboost on the ATT and the shift (final_split,
     2026-10-28). The user chose this rule on 2026-10-28; before, only riesznet
-    was capped. Other methods are returned as they are."""
-    return f"{m}_clip{CAP[block]}" if m in RIESZ else m
+    was capped. classif_aug is capped too (CAPPED). Other methods are
+    returned as they are."""
+    return f"{m}_clip{CAP[block]}" if m in CAPPED else m
 
 
 CONTRASTS = list(dict.fromkeys(
@@ -756,6 +857,13 @@ CONTRASTS = list(dict.fromkeys(
     + [("att", "plugin_logit", "plugin_xgb_clip05")]
     + [("localshift", headline(m, "localshift"), ref) for ref in ("plugin_classif", "plugin_classif_clip05")
        for m in ("rieszboost", "riesznet", "krrr")]
+    # The generic classification method (classif_aug), capped, against the
+    # block's reference plug-in: the estimand-specific propensity model for a
+    # binary treatment, the binary shift classifier for the shift and LASE.
+    + [(b, headline("classif_aug", b), ref) for b, ref in
+       [("ate", "plugin_xgb_clip01"), ("att", "plugin_xgb_clip05"), ("tsm", "plugin_xgb_clip01"),
+        ("tsm_align", "plugin_xgb_clip01"), ("shift", "plugin_classif"), ("shift", "plugin_classif_clip05"),
+        ("localshift", "plugin_classif"), ("localshift", "plugin_classif_clip05")]]
 ))
 
 
@@ -912,14 +1020,14 @@ def cmd_summarize(args):
                   f"{sub.groupby(['dgp', 'n']).rep.nunique().min()}-{sub.groupby(['dgp', 'n']).rep.nunique().max()}")
             print(t.to_string())
         # How often the cap on a Riesz learner's |alpha-hat| binds somewhere on the test set.
-        raw = sub[sub.variant.isin(list(RIESZ))]
+        raw = sub[sub.variant.isin(list(CAPPED))]
         if not raw.empty:
             est = BLOCKS[block]["estimand"]
             t = pd.DataFrame({f"cap {_alpha_cap(est, c):g} (clip{str(c)[2:]})":
                               raw.assign(b=raw.max_abs_alpha_hat > _alpha_cap(est, c)).groupby(["dgp", "n", "variant"]).b.mean()
                               for c in CLIPS})
             t = t.unstack("variant").reindex([g for g in BLOCKS[block]["dgps"] if g in t.index.get_level_values(0)], level=0)
-            print(f"\n== {block}: share of Riesz fits whose |alpha-hat| exceeds the cap somewhere on the test set")
+            print(f"\n== {block}: share of Riesz and classif_aug fits whose |alpha-hat| exceeds the cap somewhere on the test set")
             print(t.to_string(float_format=lambda v: f"{v:.2f}"))
         print(f"\n== {block}: seconds per task")
         print(sub.drop_duplicates(["dgp", "n", "rep", "method"]).groupby(["method", "n"]).seconds.mean().round(1).to_string())
@@ -975,7 +1083,7 @@ def cmd_summarize(args):
             # B is shared within a replicate, so across methods a larger s should
             # mean a larger remainder when B > 0 and a smaller one when B < 0.
             v = r.index.get_level_values("variant")
-            est = r[v.isin([headline(m, block) for m in RIESZ]) | (v.str.startswith("plugin_") & v.str.endswith("_clip01"))]
+            est = r[v.isin([headline(m, block) for m in CAPPED]) | (v.str.startswith("plugin_") & v.str.endswith("_clip01"))]
             print("\n-- across methods (Riesz learners, plug-ins clipped at 0.01), correlation of s with the remainder")
             print(est.groupby(level=["dgp", "n"]).apply(
                 lambda c: np.corrcoef(c["shrinkage s"], c["remainder (bias given the fits)"])[0, 1])
